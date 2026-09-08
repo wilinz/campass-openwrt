@@ -19,6 +19,8 @@ jobs:
           # arch=opkg 架构; target=rust 目标; rustup_target=需 rustup 装的目标(build-std 目标留空)
           # toolchain=stable/nightly; buildstd=是否 -Z build-std; luci=是否顺带打 LuCI; experimental=允许失败
           - { arch: x86_64,                  target: x86_64-unknown-linux-musl,      rustup_target: x86_64-unknown-linux-musl,      toolchain: stable,  buildstd: '0', luci: '1', experimental: false }
+          - { arch: i386_pentium4,           target: i686-unknown-linux-musl,        rustup_target: i686-unknown-linux-musl,        toolchain: stable,  buildstd: '0', luci: '0', experimental: false }
+          - { arch: riscv64_riscv64,         target: riscv64gc-unknown-linux-musl,   rustup_target: riscv64gc-unknown-linux-musl,   toolchain: stable,  buildstd: '0', luci: '0', experimental: false }
           - { arch: aarch64_generic,         target: aarch64-unknown-linux-musl,     rustup_target: aarch64-unknown-linux-musl,     toolchain: stable,  buildstd: '0', luci: '0', experimental: false }
           - { arch: aarch64_cortex-a53,      target: aarch64-unknown-linux-musl,     rustup_target: aarch64-unknown-linux-musl,     toolchain: stable,  buildstd: '0', luci: '0', experimental: false }
           - { arch: aarch64_cortex-a72,      target: aarch64-unknown-linux-musl,     rustup_target: aarch64-unknown-linux-musl,     toolchain: stable,  buildstd: '0', luci: '0', experimental: false }
