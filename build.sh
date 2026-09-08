@@ -28,9 +28,16 @@ if [ -n "$VERSION" ]; then
 	done
 fi
 
+# tar 参数: GNU(Linux CI) 与 BSD(macOS) 语法不同, 分别处理; 统一 ustar + root 属主
+if tar --version 2>/dev/null | grep -qi "gnu"; then
+	TARFMT=(--format=ustar --owner=0 --group=0 --numeric-owner)
+else
+	TARFMT=(--format ustar --uid 0 --gid 0 --numeric-owner)
+fi
+
 # ustar 格式 + root 属主, 避免 opkg 读不了 pax 扩展头
 tar_ustar() {  # <src_dir> <out.tar.gz>
-	( cd "$1" && tar --format ustar --numeric-owner --uid 0 --gid 0 -czf "$2" ./* )
+	( cd "$1" && tar "${TARFMT[@]}" -czf "$2" ./* )
 }
 
 build_ipk() {  # <pkgdir> <arch>
@@ -53,8 +60,7 @@ build_ipk() {  # <pkgdir> <arch>
 	ipk="$OUT/${name}_${ver}_${arch}.ipk"
 	rm -f "$ipk"
 	# OpenWrt 的 .ipk = 三个成员的 gzip tar (opkg-utils ipkg-build 的产物), 不是 ar!
-	( cd "$tmp" && tar --format ustar --numeric-owner --uid 0 --gid 0 \
-		-czf "$ipk" ./debian-binary ./control.tar.gz ./data.tar.gz )
+	( cd "$tmp" && tar "${TARFMT[@]}" -czf "$ipk" ./debian-binary ./control.tar.gz ./data.tar.gz )
 	rm -rf "$tmp"
 	echo "    -> $ipk"
 }
