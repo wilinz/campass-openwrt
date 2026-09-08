@@ -67,6 +67,7 @@ if [ "$BUILD_ENGINE" = "1" ]; then
 	else
 		( cd campass-rs && cargo zigbuild --release --target "$TARGET" )
 	fi
+	mkdir -p pkg/campass/data/usr/bin
 	cp "campass-rs/target/$TARGET/release/campass" pkg/campass/data/usr/bin/campass
 	chmod +x pkg/campass/data/usr/bin/campass \
 		pkg/campass/data/etc/init.d/campass \
