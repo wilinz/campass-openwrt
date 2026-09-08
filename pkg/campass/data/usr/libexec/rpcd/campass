@@ -1,0 +1,35 @@
+#!/bin/sh
+# rpcd 插件: 暴露 ubus 对象 "campass"
+case "$1" in
+	list)
+		echo '{ "status": {}, "login": {}, "logout": {}, "unbind": {}, "log": {}, "clearlog": {} }'
+		;;
+	call)
+		case "$2" in
+			status)
+				/usr/bin/campass status
+				;;
+			login)
+				/usr/bin/campass login >/dev/null 2>&1
+				/usr/bin/campass status
+				;;
+			logout)
+				/usr/bin/campass logout >/dev/null 2>&1
+				/usr/bin/campass status
+				;;
+			unbind)
+				/usr/bin/campass unbind >/dev/null 2>&1
+				/usr/bin/campass status
+				;;
+			log)
+				/usr/bin/campass log
+				;;
+			clearlog)
+				/usr/bin/campass clearlog
+				;;
+			*)
+				echo '{}'
+				;;
+		esac
+		;;
+esac

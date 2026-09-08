@@ -1,0 +1,17 @@
+{
+	"luci-app-campass": {
+		"description": "Grant access to Dr.COM auto-login",
+		"read": {
+			"ubus": {
+				"campass": [ "status", "log" ]
+			},
+			"uci": [ "campass", "firewall" ]
+		},
+		"write": {
+			"ubus": {
+				"campass": [ "login", "logout", "unbind", "clearlog" ]
+			},
+			"uci": [ "campass", "firewall" ]
+		}
+	}
+}

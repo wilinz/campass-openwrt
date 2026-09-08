@@ -1,0 +1,100 @@
+name: release
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # opkg 架构 : rust 目标 : 是否 build-std(tier-3) : 是否顺带打 LuCI 包
+          - { arch: x86_64,                 target: x86_64-unknown-linux-musl,      buildstd: '0', luci: '1' }
+          - { arch: aarch64_generic,        target: aarch64-unknown-linux-musl,     buildstd: '0', luci: '0' }
+          - { arch: aarch64_cortex-a53,     target: aarch64-unknown-linux-musl,     buildstd: '0', luci: '0' }
+          - { arch: aarch64_cortex-a72,     target: aarch64-unknown-linux-musl,     buildstd: '0', luci: '0' }
+          - { arch: arm_cortex-a7_neon-vfpv4, target: armv7-unknown-linux-musleabihf, buildstd: '0', luci: '0' }
+          - { arch: arm_cortex-a9_vfpv3-d16,  target: armv7-unknown-linux-musleabihf, buildstd: '0', luci: '0' }
+          - { arch: arm_cortex-a15_neon-vfpv4, target: armv7-unknown-linux-musleabihf, buildstd: '0', luci: '0' }
+          - { arch: mipsel_24kc,            target: mipsel-unknown-linux-musl,      buildstd: '1', luci: '0' }
+          - { arch: mips_24kc,              target: mips-unknown-linux-musl,        buildstd: '1', luci: '0' }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive version from tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.buildstd == '1' && 'nightly' || 'stable' }}
+          targets: ${{ matrix.buildstd == '1' && '' || matrix.target }}
+          components: ${{ matrix.buildstd == '1' && 'rust-src' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: campass-rs
+
+      - name: Install zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild --locked
+
+      - name: Build ipk(s)
+        env:
+          TARGET: ${{ matrix.target }}
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          BUILDSTD: ${{ matrix.buildstd }}
+          BUILD_ENGINE: '1'
+          BUILD_LUCI: ${{ matrix.luci }}
+        run: ./build.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipk-${{ matrix.arch }}
+          path: out/*.ipk
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.ipk
+          generate_release_notes: true
+          body: |
+            Campass — OpenWrt 校园网自动登录 & 保活。
+
+            按路由器架构下载对应的 `campass_*_<arch>.ipk`，再配一份架构无关的
+            `luci-app-campass_*_all.ipk` 一起安装：
+
+            ```sh
+            opkg install campass_*_<你的架构>.ipk luci-app-campass_*_all.ipk
+            ```
+
+            用 `opkg print-architecture` 查看你的架构；若架构名不完全匹配可加
+            `--force-architecture`（二进制为静态 musl，兼容同 CPU 家族）。

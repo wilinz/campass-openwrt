@@ -1,0 +1,11 @@
+#!/bin/sh
+[ -n "$IPKG_INSTROOT" ] || {
+	/etc/init.d/campass stop 2>/dev/null
+	/etc/init.d/campass disable 2>/dev/null
+	if uci -q get firewall.campass_block >/dev/null 2>&1; then
+		uci -q delete firewall.campass_block
+		uci commit firewall
+		/etc/init.d/firewall reload >/dev/null 2>&1
+	fi
+}
+exit 0

@@ -1,0 +1,10 @@
+#!/bin/sh
+[ -n "$IPKG_INSTROOT" ] || {
+	/etc/init.d/campass enable
+	/etc/init.d/rpcd reload 2>/dev/null
+	rm -f /tmp/luci-indexcache* 2>/dev/null
+	rm -rf /tmp/luci-modulecache 2>/dev/null
+	# start 会注册 procd 触发器; enabled=0 时不真正拉起 daemon
+	/etc/init.d/campass start 2>/dev/null
+}
+exit 0

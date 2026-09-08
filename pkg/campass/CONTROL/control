@@ -1,0 +1,7 @@
+Package: campass
+Version: 1.0.0
+Architecture: x86_64
+Maintainer: wilinz
+Section: net
+Priority: optional
+Description: Dr.COM 校园网自动登录引擎 (Rust) + procd 内置定时器服务, 多账号

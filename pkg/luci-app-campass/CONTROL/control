@@ -1,0 +1,8 @@
+Package: luci-app-campass
+Version: 1.0.0
+Architecture: all
+Maintainer: wilinz
+Section: luci
+Priority: optional
+Depends: luci-base, campass, rpcd
+Description: LuCI 界面 - Dr.COM 校园网自动登录(多账号切换/状态面板)
