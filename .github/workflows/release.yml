@@ -26,8 +26,8 @@ jobs:
           - { arch: arm_cortex-a9_vfpv3-d16,   target: armv7-unknown-linux-musleabihf, rustup_target: armv7-unknown-linux-musleabihf, toolchain: stable,  buildstd: '0', luci: '0', experimental: false }
           - { arch: arm_cortex-a15_neon-vfpv4, target: armv7-unknown-linux-musleabihf, rustup_target: armv7-unknown-linux-musleabihf, toolchain: stable,  buildstd: '0', luci: '0', experimental: false }
           # tier-3 (MediaTek MT7621 / ath79): nightly + build-std, best-effort
-          - { arch: mipsel_24kc,             target: mipsel-unknown-linux-musl,      rustup_target: '',                             toolchain: nightly, buildstd: '1', luci: '0', experimental: true }
-          - { arch: mips_24kc,               target: mips-unknown-linux-musl,        rustup_target: '',                             toolchain: nightly, buildstd: '1', luci: '0', experimental: true }
+          - { arch: mipsel_24kc,             target: mipsel-unknown-linux-musl,      rustup_target: '',                             toolchain: nightly, buildstd: '1', luci: '0', czb: '0.22.3', experimental: true }
+          - { arch: mips_24kc,               target: mips-unknown-linux-musl,        rustup_target: '',                             toolchain: nightly, buildstd: '1', luci: '0', czb: '0.22.3', experimental: true }
     steps:
       - uses: actions/checkout@v4
 
@@ -52,9 +52,17 @@ jobs:
           version: 0.13.0
 
       - name: Install cargo-zigbuild
-        # 钉 0.22.3: 它把 mips musl 映射成 zig 0.13 认得的 `mipsel-linux-musl`;
-        # 新版(0.23.x)发 `...-musleabi`, 与 zig 0.13 对不上, mips 链接会失败。
-        run: cargo install cargo-zigbuild --version 0.22.3 --locked
+        # 版本按 job 分流(matrix.czb):
+        #  - mips: 钉 0.22.3, 它把 mips musl 映射成 zig 0.13 认得的 `mipsel-linux-musl`;
+        #    新版(0.23.x)发 `...-musleabi`, 与 zig 0.13 对不上, mips 链接失败。
+        #  - 其余架构: 用最新版; 0.22.3 不会剥离 aarch64 的 --fix-cortex-a53-843419
+        #    勘误链接参数, 会把 aarch64 链接搞挂, 所以稳定架构不能降级。
+        run: |
+          if [ -n "${{ matrix.czb }}" ]; then
+            cargo install cargo-zigbuild --version "${{ matrix.czb }}" --locked
+          else
+            cargo install cargo-zigbuild --locked
+          fi
 
       - name: Build ipk(s)
         env:
