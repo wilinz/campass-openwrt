@@ -67,7 +67,28 @@ build_ipk() {  # <pkgdir> <arch>
 
 if [ "$BUILD_ENGINE" = "1" ]; then
 	echo "==> 交叉编译 rust 引擎 (target=$TARGET, arch=$ARCH, buildstd=$BUILDSTD)"
-	if [ "$BUILDSTD" = "1" ]; then
+	if [ "${TARGET%muslabi64}" != "$TARGET" ]; then
+		# mips64(如 octeon, N64 ABI): cargo-zigbuild 把 target 发成 zig 不认的
+		# `mips64-linux-muslabi64`(UnknownApplicationBinaryInterface), 无法用 zigbuild。
+		# 改为裸 zig cc 当 linker, zig target 用 `mips64-linux-musl`(N64 默认);
+		# musl 无 libgcc_s, 把 rust 传的 -lgcc_s 换成 zig 自带 -lunwind(供 std 回溯符号)。
+		ZT="$(echo "$TARGET" | sed 's/-unknown-linux-muslabi64$/-linux-musl/')"  # mips64->mips64-linux-musl
+		WRAP="$(mktemp -d)"
+		cat > "$WRAP/zcc.sh" <<EOF
+#!/bin/sh
+args=""
+for a in "\$@"; do [ "\$a" = "-lgcc_s" ] && a="-lunwind"; args="\$args \"\$a\""; done
+eval exec zig cc -target $ZT \$args
+EOF
+		printf '#!/bin/sh\nexec zig ar "$@"\n' > "$WRAP/zar.sh"
+		chmod +x "$WRAP"/*.sh
+		VUP="$(echo "$TARGET" | tr 'a-z-' 'A-Z_')"   # CARGO_TARGET_<T>_LINKER 用的大写形式
+		( cd campass-rs && \
+			env "CC_${TARGET//-/_}=$WRAP/zcc.sh" "AR_${TARGET//-/_}=$WRAP/zar.sh" \
+			"CARGO_TARGET_${VUP}_LINKER=$WRAP/zcc.sh" \
+			cargo +nightly build --release -Z build-std=std,panic_abort --target "$TARGET" )
+		rm -rf "$WRAP"
+	elif [ "$BUILDSTD" = "1" ]; then
 		# tier-3 mips(24kc 无 FPU): rust 按 soft-float 编, 但 zig 的 mipsel-linux-musl
 		# 默认 hard-float(-mdouble-float), 两者链接时 ABI 冲突。用 link-arg 把 zig cc
 		# 的 cpu 设成 soft_float, 让 zig 自带的 libc/compiler_rt 也编成软浮点。

@@ -28,6 +28,9 @@ jobs:
           # tier-3 (MediaTek MT7621 / ath79): nightly + build-std, best-effort
           - { arch: mipsel_24kc,             target: mipsel-unknown-linux-musl,      rustup_target: '',                             toolchain: nightly, buildstd: '1', luci: '0', czb: '0.22.3', experimental: true }
           - { arch: mips_24kc,               target: mips-unknown-linux-musl,        rustup_target: '',                             toolchain: nightly, buildstd: '1', luci: '0', czb: '0.22.3', experimental: true }
+          # mips64 (Cavium Octeon, N64, 大端): 不走 cargo-zigbuild(它发 zig 不认的
+          # muslabi64), build.sh 内按 muslabi64 后缀改用裸 zig cc 链接
+          - { arch: mips64_octeonplus,       target: mips64-unknown-linux-muslabi64, rustup_target: '',                             toolchain: nightly, buildstd: '1', luci: '0', experimental: true }
     steps:
       - uses: actions/checkout@v4
 
