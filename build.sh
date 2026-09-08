@@ -68,7 +68,14 @@ build_ipk() {  # <pkgdir> <arch>
 if [ "$BUILD_ENGINE" = "1" ]; then
 	echo "==> 交叉编译 rust 引擎 (target=$TARGET, arch=$ARCH, buildstd=$BUILDSTD)"
 	if [ "$BUILDSTD" = "1" ]; then
-		( cd campass-rs && cargo +nightly zigbuild --release \
+		# tier-3 mips(24kc 无 FPU): rust 按 soft-float 编, 但 zig 的 mipsel-linux-musl
+		# 默认 hard-float(-mdouble-float), 两者链接时 ABI 冲突。用 link-arg 把 zig cc
+		# 的 cpu 设成 soft_float, 让 zig 自带的 libc/compiler_rt 也编成软浮点。
+		EXTRA_RUSTFLAGS=""
+		case "$TARGET" in
+			mips*-unknown-linux-musl) EXTRA_RUSTFLAGS="-C link-arg=-mcpu=mips32r2+soft_float" ;;
+		esac
+		( cd campass-rs && RUSTFLAGS="${RUSTFLAGS:-} $EXTRA_RUSTFLAGS" cargo +nightly zigbuild --release \
 			-Z build-std=std,panic_abort --target "$TARGET" )
 	else
 		( cd campass-rs && cargo zigbuild --release --target "$TARGET" )

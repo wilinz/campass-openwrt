@@ -52,7 +52,9 @@ jobs:
           version: 0.13.0
 
       - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild --locked
+        # 钉 0.22.3: 它把 mips musl 映射成 zig 0.13 认得的 `mipsel-linux-musl`;
+        # 新版(0.23.x)发 `...-musleabi`, 与 zig 0.13 对不上, mips 链接会失败。
+        run: cargo install cargo-zigbuild --version 0.22.3 --locked
 
       - name: Build ipk(s)
         env:
