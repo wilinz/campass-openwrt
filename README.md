@@ -37,19 +37,41 @@ build.sh               交叉编译 + 打包两个 .ipk（无需 OpenWrt SDK）
 docs/                  截图
 ```
 
-## 构建
+## 支持的架构
 
-需要 `cargo-zigbuild` + `zig`（在任意平台交叉出 x86_64 静态 musl 二进制）：
+每次打 tag，CI 交叉编译并发布覆盖 6 大 CPU 家族的预编译包（[Releases](https://github.com/wilinz/campass-openwrt/releases)）。引擎为静态 musl 二进制，同 CPU 家族内可 `--force-architecture` 通用。
 
-```sh
-rustup target add x86_64-unknown-linux-musl
-cargo install cargo-zigbuild        # 并安装 zig（brew install zig / 见其文档）
-./build.sh                          # 产物在 out/
-```
+| opkg 架构 | rust target | 典型设备 |
+|-----------|-------------|----------|
+| `x86_64` | `x86_64-unknown-linux-musl` | 软路由 / x86-64 |
+| `i386_pentium4` | `i686-unknown-linux-musl` | 老 32 位 x86 软路由 |
+| `aarch64_generic` / `cortex-a53` / `cortex-a72` | `aarch64-unknown-linux-musl` | 树莓派、多数新 64 位 ARM 路由 |
+| `arm_cortex-a7` / `a9` / `a15` | `armv7-unknown-linux-musleabihf` | 32 位 ARM 路由 |
+| `mipsel_24kc` | `mipsel-unknown-linux-musl` | MT7621 等主流家用路由（小端）|
+| `mips_24kc` | `mips-unknown-linux-musl` | ath79 等（大端）|
+| `mips64_octeonplus` | `mips64-unknown-linux-muslabi64` | Cavium Octeon（EdgeRouter Lite/PoE 等）|
+| `mips64el_generic` | `mips64el-unknown-linux-muslabi64` | 小端 64 位 MIPS |
+| `riscv64_riscv64` | `riscv64gc-unknown-linux-musl` | VisionFive / D1 等 RISC-V |
+| `luci-app-campass_..._all` | — | 界面，**架构无关**，配任一引擎包 |
 
-> OpenWrt 的 `.ipk` 是 `debian-binary` + `control.tar.gz` + `data.tar.gz` 三个成员打成的 **gzip tar**（不是 Debian 的 `ar` 归档）。`build.sh` 已按此格式打包。默认目标架构 x86_64，改 `build.sh` 里的 `TARGET` / `arch` 即可适配其它路由器。
+> mips / mips64 为 Rust tier-3 目标，用 nightly + `-Z build-std` + zig 0.13 交叉；mips_24kc（无 FPU）走软浮点。见 `.github/workflows/release.yml` 的构建矩阵。
 
 ## 安装
+
+**方式一：下载预编译包（推荐）**
+
+```sh
+opkg print-architecture                       # 先查本机架构（如 mipsel_24kc）
+```
+
+从 [Releases](https://github.com/wilinz/campass-openwrt/releases) 下载对应架构的 `campass_*_<架构>.ipk` 和架构无关的 `luci-app-campass_*_all.ipk`：
+
+```sh
+opkg install campass_*_<你的架构>.ipk luci-app-campass_*_all.ipk
+# 架构名不完全匹配时可加 --force-architecture（二进制静态 musl，兼容同 CPU 家族）
+```
+
+**方式二：本地构建后推送**
 
 ```sh
 scp out/campass_*.ipk out/luci-app-campass_*.ipk root@路由器:/tmp/
@@ -57,6 +79,24 @@ ssh root@路由器 'opkg install /tmp/campass_*.ipk /tmp/luci-app-campass_*.ipk'
 ```
 
 安装后服务默认**休眠**（`enabled=0`）。进 LuCI **服务 → Campass**，填好账号、勾选「启用自动登录」并保存应用即可。
+
+## 从源码构建
+
+需要 `cargo-zigbuild` + `zig`（在任意平台交叉出静态 musl 二进制，无需 OpenWrt SDK）：
+
+```sh
+rustup target add x86_64-unknown-linux-musl
+cargo install cargo-zigbuild        # 并安装 zig（brew install zig / 见其文档）
+./build.sh                          # 默认 x86_64，产物在 out/
+```
+
+换架构由环境变量驱动，例如小端 MT7621：
+
+```sh
+TARGET=mipsel-unknown-linux-musl ARCH=mipsel_24kc BUILDSTD=1 ./build.sh
+```
+
+> `TARGET` = rust 目标三元组，`ARCH` = opkg 架构名，`BUILDSTD=1` 用 nightly `-Z build-std`（mips 等 tier-3 目标必需）。OpenWrt 的 `.ipk` 是 `debian-binary` + `control.tar.gz` + `data.tar.gz` 三个成员打成的 **gzip tar**（不是 Debian 的 `ar` 归档），`build.sh` 已按此格式打包。
 
 ## 命令行
 
