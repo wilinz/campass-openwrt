@@ -10,7 +10,9 @@ path = "src/main.rs"
 [features]
 default = []
 # tls: URL 探测走真握手 + 证书校验(rustls 0.23 + aws-lc-rs)。
-# aws-lc 在 mips/mips64/riscv 这些 tier-3 目标上编不过, 所以做成可选;
+# aws-lc 在四个 mips 目标上都能交叉编译并正常工作(含大端, 已在 qemu-user 下
+# 验证真握手 + 拒掉过期/自签证书; 交叉编译要点见 build.sh 的软浮点处理)。
+# 仍做成可选, 只因体积: 开了从 ~860KB 涨到 ~2.3MB, 小 flash 机型吃不消。
 # 不开时 URL 探测退回自带的 TLS 握手校验(只验对端会说 TLS, 不验证书)。
 tls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
 

@@ -202,7 +202,7 @@ function fmtDuration(sec) {
 	return out.join('');
 }
 
-var ISP = { '0': _('校园网/未分配'), '1': _('电信'), '2': _('移动'), '3': _('联通'), '4': _('广电') };
+var ISP = { '0': _('校园网/未分配'), '1': _('电信'), '2': _('移动'), '3': _('联通'), '4': _('桂林广电') };
 var ZXOPT = {
 	'1': _('普通'), '2': _('专线(不可用)'), '4': _('专线(不可用)'),
 	'5': _('专线(不可用)'), '6': _('专线(可用)'), '9': _('专线(可用)')
@@ -703,11 +703,15 @@ return view.extend({
 		o = a.option(form.Value, 'student_id', _('学号'));
 		o.rmempty = false;
 
-		o = a.option(form.ListValue, 'isp', _('运营商'));
+		// Value(而非 ListValue) + 建议值 => 可编辑下拉: 既能选预设, 也能自己填。
+		// 引擎按此拼后缀: 空/校园网/campus => 无后缀; 以 @ 开头 => 原样; 否则补 @。
+		// 自定义时填后缀本身, 如 @abc 或 abc(都会得到 @abc), 校园网留空。
+		o = a.option(form.Value, 'isp', _('运营商'),
+			_('可选预设或直接填自定义后缀(如 @abc); 校园网留空'));
 		o.value('telecom', _('电信'));
 		o.value('cmcc', _('移动'));
 		o.value('unicom', _('联通'));
-		o.value('glgd', _('广电'));
+		o.value('glgd', _('桂林广电'));
 		o.value('', _('校园网'));
 
 		o = a.option(form.Value, 'password', _('密码'));

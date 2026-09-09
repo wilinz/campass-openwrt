@@ -77,12 +77,21 @@ if [ "$BUILD_ENGINE" = "1" ]; then
 		# `mips64-linux-muslabi64`(UnknownApplicationBinaryInterface), 无法用 zigbuild。
 		# 改为裸 zig cc 当 linker, zig target 用 `mips64-linux-musl`(N64 默认);
 		# musl 无 libgcc_s, 把 rust 传的 -lgcc_s 换成 zig 自带 -lunwind(供 std 回溯符号)。
+		# 同一个 wrapper 还兼作 aws-lc-sys 的 CC, 而 cc-rs 会附带 rust 三元组
+		# `--target=mips64-unknown-linux-muslabi64`, zig 不认(UnknownOperatingSystem),
+		# 所以一并丢掉 —— 目标已由上面的 -target $ZT 指定。
 		ZT="$(echo "$TARGET" | sed 's/-unknown-linux-muslabi64$/-linux-musl/')"  # mips64->mips64-linux-musl
 		WRAP="$(mktemp -d)"
 		cat > "$WRAP/zcc.sh" <<EOF
 #!/bin/sh
 args=""
-for a in "\$@"; do [ "\$a" = "-lgcc_s" ] && a="-lunwind"; args="\$args \"\$a\""; done
+for a in "\$@"; do
+	case "\$a" in
+		--target=*) continue ;;
+		-lgcc_s)    a="-lunwind" ;;
+	esac
+	args="\$args \"\$a\""
+done
 eval exec zig cc -target $ZT \$args
 EOF
 		printf '#!/bin/sh\nexec zig ar "$@"\n' > "$WRAP/zar.sh"
@@ -97,11 +106,18 @@ EOF
 		# tier-3 mips(24kc 无 FPU): rust 按 soft-float 编, 但 zig 的 mipsel-linux-musl
 		# 默认 hard-float(-mdouble-float), 两者链接时 ABI 冲突。用 link-arg 把 zig cc
 		# 的 cpu 设成 soft_float, 让 zig 自带的 libc/compiler_rt 也编成软浮点。
+		# 开 tls 时 aws-lc-sys 的 C 走 cc-rs + zigbuild 设的 CC, 那条路不吃 link-arg,
+		# 仍会编成 hard-float 而链接失败, 所以再给它一份 CFLAGS_<target>=-msoft-float。
 		EXTRA_RUSTFLAGS=""
+		CC_ENV=()
 		case "$TARGET" in
-			mips*-unknown-linux-musl) EXTRA_RUSTFLAGS="-C link-arg=-mcpu=mips32r2+soft_float" ;;
+			mips*-unknown-linux-musl)
+				EXTRA_RUSTFLAGS="-C link-arg=-mcpu=mips32r2+soft_float"
+				CC_ENV=("CFLAGS_${TARGET//-/_}=-msoft-float")
+				;;
 		esac
-		( cd campass-rs && RUSTFLAGS="${RUSTFLAGS:-} $EXTRA_RUSTFLAGS" cargo +nightly zigbuild --release \
+		( cd campass-rs && env ${CC_ENV[@]+"${CC_ENV[@]}"} RUSTFLAGS="${RUSTFLAGS:-} $EXTRA_RUSTFLAGS" \
+			cargo +nightly zigbuild --release \
 			$FEAT_ARG -Z build-std=std,panic_abort --target "$TARGET" )
 	else
 		( cd campass-rs && cargo zigbuild --release $FEAT_ARG --target "$TARGET" )

@@ -28,12 +28,12 @@ jobs:
           - { arch: arm_cortex-a9_vfpv3-d16,   target: armv7-unknown-linux-musleabihf, rustup_target: armv7-unknown-linux-musleabihf, toolchain: stable,  buildstd: '0', luci: '0', features: 'tls', experimental: false }
           - { arch: arm_cortex-a15_neon-vfpv4, target: armv7-unknown-linux-musleabihf, rustup_target: armv7-unknown-linux-musleabihf, toolchain: stable,  buildstd: '0', luci: '0', features: 'tls', experimental: false }
           # tier-3 (MediaTek MT7621 / ath79): nightly + build-std, best-effort
-          - { arch: mipsel_24kc,             target: mipsel-unknown-linux-musl,      rustup_target: '',                             toolchain: nightly, buildstd: '1', luci: '0', czb: '0.22.3', features: '', experimental: true }
-          - { arch: mips_24kc,               target: mips-unknown-linux-musl,        rustup_target: '',                             toolchain: nightly, buildstd: '1', luci: '0', czb: '0.22.3', features: '', experimental: true }
+          - { arch: mipsel_24kc,             target: mipsel-unknown-linux-musl,      rustup_target: '',                             toolchain: nightly, buildstd: '1', luci: '0', czb: '0.22.3', features: 'tls', experimental: true }
+          - { arch: mips_24kc,               target: mips-unknown-linux-musl,        rustup_target: '',                             toolchain: nightly, buildstd: '1', luci: '0', czb: '0.22.3', features: 'tls', experimental: true }
           # mips64 (Cavium Octeon, N64, 大端): 不走 cargo-zigbuild(它发 zig 不认的
           # muslabi64), build.sh 内按 muslabi64 后缀改用裸 zig cc 链接
-          - { arch: mips64_octeonplus,       target: mips64-unknown-linux-muslabi64, rustup_target: '',                             toolchain: nightly, buildstd: '1', luci: '0', features: '', experimental: true }
-          - { arch: mips64el_generic,        target: mips64el-unknown-linux-muslabi64, rustup_target: '',                           toolchain: nightly, buildstd: '1', luci: '0', features: '', experimental: true }
+          - { arch: mips64_octeonplus,       target: mips64-unknown-linux-muslabi64, rustup_target: '',                             toolchain: nightly, buildstd: '1', luci: '0', features: 'tls', experimental: true }
+          - { arch: mips64el_generic,        target: mips64el-unknown-linux-muslabi64, rustup_target: '',                           toolchain: nightly, buildstd: '1', luci: '0', features: 'tls', experimental: true }
     steps:
       - uses: actions/checkout@v4
 
@@ -77,8 +77,11 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
           BUILDSTD: ${{ matrix.buildstd }}
           # 空值 = 不开 tls feature, URL 探测退回自带握手校验。
-          # mips 系尚未在 CI 上验证 aws-lc 能否交叉编译, 先留空;
-          # 若某次 CI 证明能编过, 把矩阵里对应的 features 改成 'tls' 即可。
+          # 四个 mips 目标(含大端)都已本机验证: aws-lc 交叉编译通过, 且在
+          # qemu-user 下真握手成功、能正确拒掉 expired/self-signed 证书,
+          # 所以全开 tls。前提是 build.sh 里那两处软浮点 / --target 处理。
+          # 代价: 开 tls 后产物 859KB -> 2.3MB(ipk ~0.95MB), 小 flash 机型注意,
+          # 顶不住就把对应行的 features 改回空值。
           FEATURES: ${{ matrix.features }}
           BUILD_ENGINE: '1'
           BUILD_LUCI: ${{ matrix.luci }}

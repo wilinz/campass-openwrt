@@ -22,7 +22,7 @@ Campass speaks the **Dr.COM / eportal** web-auth protocol used by many Chinese c
 - **状态面板 + 运行日志** —— 在线状态、uid、公网 IP、上次登录，实时刷新。
 - **防误触** —— 登出 / 解绑需输入**操作口令**二次确认。
 - **防篡改** —— 一键写防火墙规则，禁止 LAN 用户直接访问认证网关，但不影响他们上网。
-- **运营商后缀** —— 电信 `@telecom` / 移动 `@cmcc` / 联通 `@unicom` / 广电 `@glgd` / 校园网（无后缀）。
+- **运营商后缀** —— 电信 `@telecom` / 移动 `@cmcc` / 联通 `@unicom` / 桂林广电 `@glgd` / 校园网（无后缀）。也可自定义：`isp` 填任意后缀（如 `abc` 或 `@abc`，都会得到 `@abc`），LuCI 里那一栏是可编辑下拉框。
 
 ## 组成
 
@@ -79,14 +79,14 @@ ssh root@路由器 'opkg install /tmp/campass_*.ipk /tmp/luci-app-campass_*.ipk'
 | `aarch64_generic` / `cortex-a53` / `cortex-a72` | `aarch64-unknown-linux-musl` | 树莓派、多数新 64 位 ARM 路由 | ✅ |
 | `arm_cortex-a7` / `a9` / `a15` | `armv7-unknown-linux-musleabihf` | 32 位 ARM 路由 | ✅ |
 | `riscv64_riscv64` | `riscv64gc-unknown-linux-musl` | VisionFive / D1 等 RISC-V | ✅ |
-| `mipsel_24kc` | `mipsel-unknown-linux-musl` | MT7621 等主流家用路由（小端）| ⚠️ |
-| `mips_24kc` | `mips-unknown-linux-musl` | ath79 等（大端）| ⚠️ |
-| `mips64_octeonplus` | `mips64-unknown-linux-muslabi64` | Cavium Octeon（EdgeRouter Lite/PoE 等）| ⚠️ |
-| `mips64el_generic` | `mips64el-unknown-linux-muslabi64` | 小端 64 位 MIPS | ⚠️ |
+| `mipsel_24kc` | `mipsel-unknown-linux-musl` | MT7621 等主流家用路由（小端）| ✅ |
+| `mips_24kc` | `mips-unknown-linux-musl` | ath79 等（大端）| ✅ |
+| `mips64_octeonplus` | `mips64-unknown-linux-muslabi64` | Cavium Octeon（EdgeRouter Lite/PoE 等）| ✅ |
+| `mips64el_generic` | `mips64el-unknown-linux-muslabi64` | 小端 64 位 MIPS | ✅ |
 | `luci-app-campass_..._all` | — | 界面，**架构无关**，配任一引擎包 | — |
 
 - mips / mips64 为 Rust tier-3 目标，用 nightly + `-Z build-std` + zig 交叉；mips_24kc（无 FPU）走软浮点。
-- ⚠️ = 未验证 aws-lc-rs 能否在该目标上交叉编译，CI 里暂不编入证书校验，连通性探测退回自带的 TLS 握手校验（见[下节](#连通性探测)）。装好后 `campass probe` 的 `tls_verify` 字段会告诉你当前二进制是哪种。
+- mips 系的证书校验已在 qemu-user 下逐个验证（含两个大端目标）：aws-lc-rs 能交叉编译，真握手成功，过期 / 自签证书会被正确拒绝。代价是引擎产物从 ~860KB 涨到 ~2.3MB（ipk ~0.95MB），4MB flash 的老机型可能装不下——那就自己 `FEATURES= ./build.sh` 编一个精简版。装好后 `campass probe` 的 `tls_verify` 字段会告诉你当前二进制是哪种。
 
 ## 连通性探测
 
@@ -132,7 +132,7 @@ TARGET=mipsel-unknown-linux-musl ARCH=mipsel_24kc BUILDSTD=1 FEATURES= ./build.s
 | `ARCH` | opkg 架构名 |
 | `VERSION` | 版本号，默认取自 `CONTROL/control`（CI 用 tag 覆盖） |
 | `BUILDSTD` | `1` = 用 nightly `-Z build-std`，mips 等 tier-3 目标必需 |
-| `FEATURES` | cargo features，默认 `tls`（证书校验，实测 x86_64 / riscv64 musl 可交叉编译）；置空则不编入 aws-lc-rs，体积从 ~1.1MB 降到 ~320KB，探测退回握手校验 |
+| `FEATURES` | cargo features，默认 `tls`（证书校验，全部发布架构实测可交叉编译，含 mips/mips64 大小端）；置空则不编入 aws-lc-rs，体积大致减去 1.4MB，探测退回握手校验 |
 | `BUILD_ENGINE` / `BUILD_LUCI` | `1`/`0`，分别控制是否构建引擎包 / LuCI 包 |
 
 > OpenWrt 的 `.ipk` 是 `debian-binary` + `control.tar.gz` + `data.tar.gz` 三个成员打成的 **gzip tar**（不是 Debian 的 `ar` 归档），`build.sh` 已按此格式打包。
