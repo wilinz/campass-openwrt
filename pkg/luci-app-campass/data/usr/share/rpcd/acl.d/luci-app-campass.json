@@ -3,13 +3,13 @@
 		"description": "Grant access to Dr.COM auto-login",
 		"read": {
 			"ubus": {
-				"campass": [ "status", "log" ]
+				"campass": [ "status", "log", "accounts", "switchstatus", "probe", "auth" ]
 			},
 			"uci": [ "campass", "firewall" ]
 		},
 		"write": {
 			"ubus": {
-				"campass": [ "login", "logout", "unbind", "clearlog" ]
+				"campass": [ "login", "logout", "unbind", "clearlog", "switch", "clearauth" ]
 			},
 			"uci": [ "campass", "firewall" ]
 		}

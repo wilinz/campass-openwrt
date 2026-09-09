@@ -7,9 +7,19 @@ edition = "2021"
 name = "campass"
 path = "src/main.rs"
 
+[features]
+default = []
+# tls: URL 探测走真握手 + 证书校验(rustls 0.23 + aws-lc-rs)。
+# aws-lc 在 mips/mips64/riscv 这些 tier-3 目标上编不过, 所以做成可选;
+# 不开时 URL 探测退回自带的 TLS 握手校验(只验对端会说 TLS, 不验证书)。
+tls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
+
 [dependencies]
 # 纯 HTTP 客户端, 关掉 TLS(网关全是明文 http, 不需要 https)
 minreq = { version = "2", default-features = false }
+rustls = { version = "0.23", optional = true, default-features = false, features = ["std", "aws-lc-rs", "tls12", "logging"] }
+webpki-roots = { version = "1", optional = true }
+rustls-pki-types = { version = "1", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 urlencoding = "2"

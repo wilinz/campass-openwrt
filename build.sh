@@ -7,6 +7,8 @@
 #   ARCH     opkg 架构名       (默认 x86_64)
 #   VERSION  版本号            (默认取自 CONTROL/control)
 #   BUILDSTD 1=用 nightly -Z build-std 编 tier-3 目标(如 mips) (默认 0)
+#   FEATURES cargo features, 逗号分隔 (默认 tls;
+#            置空则 URL 探测退回自带握手校验, 给 aws-lc 编不过的架构用)
 #   BUILD_ENGINE 1/0  是否编译+打包引擎包 (默认 1)
 #   BUILD_LUCI   1/0  是否打包 LuCI 包(架构无关) (默认 1)
 set -euo pipefail
@@ -17,6 +19,7 @@ TARGET="${TARGET:-x86_64-unknown-linux-musl}"
 ARCH="${ARCH:-x86_64}"
 VERSION="${VERSION:-}"
 BUILDSTD="${BUILDSTD:-0}"
+FEATURES="${FEATURES-tls}"
 BUILD_ENGINE="${BUILD_ENGINE:-1}"
 BUILD_LUCI="${BUILD_LUCI:-1}"
 export COPYFILE_DISABLE=1   # 禁 macOS AppleDouble (._*)
@@ -66,7 +69,9 @@ build_ipk() {  # <pkgdir> <arch>
 }
 
 if [ "$BUILD_ENGINE" = "1" ]; then
-	echo "==> 交叉编译 rust 引擎 (target=$TARGET, arch=$ARCH, buildstd=$BUILDSTD)"
+	FEAT_ARG=""
+	[ -n "$FEATURES" ] && FEAT_ARG="--features $FEATURES"
+	echo "==> 交叉编译 rust 引擎 (target=$TARGET, arch=$ARCH, buildstd=$BUILDSTD, features=${FEATURES:-无})"
 	if [ "${TARGET%muslabi64}" != "$TARGET" ]; then
 		# mips64(如 octeon, N64 ABI): cargo-zigbuild 把 target 发成 zig 不认的
 		# `mips64-linux-muslabi64`(UnknownApplicationBinaryInterface), 无法用 zigbuild。
@@ -86,7 +91,7 @@ EOF
 		( cd campass-rs && \
 			env "CC_${TARGET//-/_}=$WRAP/zcc.sh" "AR_${TARGET//-/_}=$WRAP/zar.sh" \
 			"CARGO_TARGET_${VUP}_LINKER=$WRAP/zcc.sh" \
-			cargo +nightly build --release -Z build-std=std,panic_abort --target "$TARGET" )
+			cargo +nightly build --release $FEAT_ARG -Z build-std=std,panic_abort --target "$TARGET" )
 		rm -rf "$WRAP"
 	elif [ "$BUILDSTD" = "1" ]; then
 		# tier-3 mips(24kc 无 FPU): rust 按 soft-float 编, 但 zig 的 mipsel-linux-musl
@@ -97,9 +102,9 @@ EOF
 			mips*-unknown-linux-musl) EXTRA_RUSTFLAGS="-C link-arg=-mcpu=mips32r2+soft_float" ;;
 		esac
 		( cd campass-rs && RUSTFLAGS="${RUSTFLAGS:-} $EXTRA_RUSTFLAGS" cargo +nightly zigbuild --release \
-			-Z build-std=std,panic_abort --target "$TARGET" )
+			$FEAT_ARG -Z build-std=std,panic_abort --target "$TARGET" )
 	else
-		( cd campass-rs && cargo zigbuild --release --target "$TARGET" )
+		( cd campass-rs && cargo zigbuild --release $FEAT_ARG --target "$TARGET" )
 	fi
 	mkdir -p pkg/campass/data/usr/bin
 	cp "campass-rs/target/$TARGET/release/campass" pkg/campass/data/usr/bin/campass

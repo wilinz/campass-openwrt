@@ -5,9 +5,15 @@ config campass 'global'
 	option gateway '10.0.1.5'
 	option confirm_word 'campass'
 	option watchdog '1'
-	option ping_host 'baidu.com'
+	# 连通性判定只认 https(完整证书校验)。不用 ping/http: 认证网关会代答 ICMP,
+	# 也会劫持明文 http 返回门户页, 两者都能伪造出"网络正常"的假象。
+	# 可写多条, 按序试, 任一通过即算通; 建议放两个不同家的站点防单站故障误判。
+	list probe_url 'https://www.baidu.com'
+	list probe_url 'https://www.qq.com'
 	option watchdog_threshold '300'
+	option watchdog_failover '1'   # 恢复失败时自动改用列表里其他账号(封号/欠费自救)
 	option watchdog_interval '60'
+	option switch_timeout '120'
 	option block_lan '0'
 	option block_zone 'lan'
 

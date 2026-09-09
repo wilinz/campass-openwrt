@@ -1,5 +1,19 @@
 #!/bin/sh
 [ -n "$IPKG_INSTROOT" ] || {
+	# 升级时老配置里没有新选项, 补默认值(引擎本身也有内置默认, 这里只为 LuCI 显示)
+	[ -n "$(uci -q get campass.global.switch_timeout)" ] || {
+		uci -q set campass.global.switch_timeout='120'
+		uci commit campass
+	}
+	[ -n "$(uci -q get campass.global.watchdog_failover)" ] || {
+		uci -q set campass.global.watchdog_failover='1'
+		uci commit campass
+	}
+	[ -n "$(uci -q get campass.global.probe_url)" ] || {
+		uci -q add_list campass.global.probe_url='https://www.baidu.com'
+		uci -q add_list campass.global.probe_url='https://www.qq.com'
+		uci commit campass
+	}
 	/etc/init.d/campass enable
 	/etc/init.d/rpcd reload 2>/dev/null
 	rm -f /tmp/luci-indexcache* 2>/dev/null

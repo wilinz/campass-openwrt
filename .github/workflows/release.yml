@@ -18,22 +18,22 @@ jobs:
         include:
           # arch=opkg 架构; target=rust 目标; rustup_target=需 rustup 装的目标(build-std 目标留空)
           # toolchain=stable/nightly; buildstd=是否 -Z build-std; luci=是否顺带打 LuCI; experimental=允许失败
-          - { arch: x86_64,                  target: x86_64-unknown-linux-musl,      rustup_target: x86_64-unknown-linux-musl,      toolchain: stable,  buildstd: '0', luci: '1', experimental: false }
-          - { arch: i386_pentium4,           target: i686-unknown-linux-musl,        rustup_target: i686-unknown-linux-musl,        toolchain: stable,  buildstd: '0', luci: '0', experimental: false }
-          - { arch: riscv64_riscv64,         target: riscv64gc-unknown-linux-musl,   rustup_target: riscv64gc-unknown-linux-musl,   toolchain: stable,  buildstd: '0', luci: '0', experimental: false }
-          - { arch: aarch64_generic,         target: aarch64-unknown-linux-musl,     rustup_target: aarch64-unknown-linux-musl,     toolchain: stable,  buildstd: '0', luci: '0', experimental: false }
-          - { arch: aarch64_cortex-a53,      target: aarch64-unknown-linux-musl,     rustup_target: aarch64-unknown-linux-musl,     toolchain: stable,  buildstd: '0', luci: '0', experimental: false }
-          - { arch: aarch64_cortex-a72,      target: aarch64-unknown-linux-musl,     rustup_target: aarch64-unknown-linux-musl,     toolchain: stable,  buildstd: '0', luci: '0', experimental: false }
-          - { arch: arm_cortex-a7_neon-vfpv4,  target: armv7-unknown-linux-musleabihf, rustup_target: armv7-unknown-linux-musleabihf, toolchain: stable,  buildstd: '0', luci: '0', experimental: false }
-          - { arch: arm_cortex-a9_vfpv3-d16,   target: armv7-unknown-linux-musleabihf, rustup_target: armv7-unknown-linux-musleabihf, toolchain: stable,  buildstd: '0', luci: '0', experimental: false }
-          - { arch: arm_cortex-a15_neon-vfpv4, target: armv7-unknown-linux-musleabihf, rustup_target: armv7-unknown-linux-musleabihf, toolchain: stable,  buildstd: '0', luci: '0', experimental: false }
+          - { arch: x86_64,                  target: x86_64-unknown-linux-musl,      rustup_target: x86_64-unknown-linux-musl,      toolchain: stable,  buildstd: '0', luci: '1', features: 'tls', experimental: false }
+          - { arch: i386_pentium4,           target: i686-unknown-linux-musl,        rustup_target: i686-unknown-linux-musl,        toolchain: stable,  buildstd: '0', luci: '0', features: 'tls', experimental: false }
+          - { arch: riscv64_riscv64,         target: riscv64gc-unknown-linux-musl,   rustup_target: riscv64gc-unknown-linux-musl,   toolchain: stable,  buildstd: '0', luci: '0', features: 'tls', experimental: false }
+          - { arch: aarch64_generic,         target: aarch64-unknown-linux-musl,     rustup_target: aarch64-unknown-linux-musl,     toolchain: stable,  buildstd: '0', luci: '0', features: 'tls', experimental: false }
+          - { arch: aarch64_cortex-a53,      target: aarch64-unknown-linux-musl,     rustup_target: aarch64-unknown-linux-musl,     toolchain: stable,  buildstd: '0', luci: '0', features: 'tls', experimental: false }
+          - { arch: aarch64_cortex-a72,      target: aarch64-unknown-linux-musl,     rustup_target: aarch64-unknown-linux-musl,     toolchain: stable,  buildstd: '0', luci: '0', features: 'tls', experimental: false }
+          - { arch: arm_cortex-a7_neon-vfpv4,  target: armv7-unknown-linux-musleabihf, rustup_target: armv7-unknown-linux-musleabihf, toolchain: stable,  buildstd: '0', luci: '0', features: 'tls', experimental: false }
+          - { arch: arm_cortex-a9_vfpv3-d16,   target: armv7-unknown-linux-musleabihf, rustup_target: armv7-unknown-linux-musleabihf, toolchain: stable,  buildstd: '0', luci: '0', features: 'tls', experimental: false }
+          - { arch: arm_cortex-a15_neon-vfpv4, target: armv7-unknown-linux-musleabihf, rustup_target: armv7-unknown-linux-musleabihf, toolchain: stable,  buildstd: '0', luci: '0', features: 'tls', experimental: false }
           # tier-3 (MediaTek MT7621 / ath79): nightly + build-std, best-effort
-          - { arch: mipsel_24kc,             target: mipsel-unknown-linux-musl,      rustup_target: '',                             toolchain: nightly, buildstd: '1', luci: '0', czb: '0.22.3', experimental: true }
-          - { arch: mips_24kc,               target: mips-unknown-linux-musl,        rustup_target: '',                             toolchain: nightly, buildstd: '1', luci: '0', czb: '0.22.3', experimental: true }
+          - { arch: mipsel_24kc,             target: mipsel-unknown-linux-musl,      rustup_target: '',                             toolchain: nightly, buildstd: '1', luci: '0', czb: '0.22.3', features: '', experimental: true }
+          - { arch: mips_24kc,               target: mips-unknown-linux-musl,        rustup_target: '',                             toolchain: nightly, buildstd: '1', luci: '0', czb: '0.22.3', features: '', experimental: true }
           # mips64 (Cavium Octeon, N64, 大端): 不走 cargo-zigbuild(它发 zig 不认的
           # muslabi64), build.sh 内按 muslabi64 后缀改用裸 zig cc 链接
-          - { arch: mips64_octeonplus,       target: mips64-unknown-linux-muslabi64, rustup_target: '',                             toolchain: nightly, buildstd: '1', luci: '0', experimental: true }
-          - { arch: mips64el_generic,        target: mips64el-unknown-linux-muslabi64, rustup_target: '',                           toolchain: nightly, buildstd: '1', luci: '0', experimental: true }
+          - { arch: mips64_octeonplus,       target: mips64-unknown-linux-muslabi64, rustup_target: '',                             toolchain: nightly, buildstd: '1', luci: '0', features: '', experimental: true }
+          - { arch: mips64el_generic,        target: mips64el-unknown-linux-muslabi64, rustup_target: '',                           toolchain: nightly, buildstd: '1', luci: '0', features: '', experimental: true }
     steps:
       - uses: actions/checkout@v4
 
@@ -76,6 +76,10 @@ jobs:
           ARCH: ${{ matrix.arch }}
           VERSION: ${{ steps.ver.outputs.version }}
           BUILDSTD: ${{ matrix.buildstd }}
+          # 空值 = 不开 tls feature, URL 探测退回自带握手校验。
+          # mips 系尚未在 CI 上验证 aws-lc 能否交叉编译, 先留空;
+          # 若某次 CI 证明能编过, 把矩阵里对应的 features 改成 'tls' 即可。
+          FEATURES: ${{ matrix.features }}
           BUILD_ENGINE: '1'
           BUILD_LUCI: ${{ matrix.luci }}
         run: ./build.sh
