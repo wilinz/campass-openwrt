@@ -99,6 +99,12 @@ jobs:
     if: ${{ always() && startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     steps:
+      # checkout 必须在 download-artifact 之前: 它会清掉工作区里的未跟踪文件(dist/)。
+      # 要 tags 的完整对象才能读 annotated tag 的正文, 所以 fetch-depth: 0。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -107,22 +113,41 @@ jobs:
       - name: List artifacts
         run: ls -la dist
 
+      - name: Compose release notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # 本版亮点 = 打 tag 时 `git tag -a` 写的正文; 只写了一行标题就退回标题;
+          # 都没有就退回该 tag 指向的 commit 标题。保证每版文案不一样。
+          hl="$(git tag -l --format='%(contents:body)' "$TAG")"
+          [ -n "${hl//[[:space:]]/}" ] || hl="$(git tag -l --format='%(contents:subject)' "$TAG")"
+          [ -n "${hl//[[:space:]]/}" ] || hl="$(git log -1 --format=%s "$TAG")"
+          {
+            printf 'Campass — OpenWrt 校园网自动登录 & 保活。\n\n'
+            printf '## 本版改动\n\n%s\n\n' "$hl"
+            cat <<'EOF'
+          ## 安装
+
+          按路由器架构下载对应的 `campass_*_<arch>.ipk`，再配一份架构无关的
+          `luci-app-campass_*_all.ipk` 一起安装：
+
+          ```sh
+          opkg install campass_*_<你的架构>.ipk luci-app-campass_*_all.ipk
+          ```
+
+          用 `opkg print-architecture` 查看架构；若架构名不完全匹配可加
+          `--force-architecture`（二进制为静态 musl，兼容同 CPU 家族）。
+
+          > mips / mips64（MT7621、ath79、Octeon 等）为 Rust tier-3 目标，
+          > 用 nightly + `-Z build-std` 交叉编译，属实验性构建，可能缺席。
+          EOF
+          } > release-notes.md
+          cat release-notes.md
+
       - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.ipk
           generate_release_notes: true
-          body: |
-            Campass — OpenWrt 校园网自动登录 & 保活。
-
-            按路由器架构下载对应的 `campass_*_<arch>.ipk`，再配一份架构无关的
-            `luci-app-campass_*_all.ipk` 一起安装：
-
-            ```sh
-            opkg install campass_*_<你的架构>.ipk luci-app-campass_*_all.ipk
-            ```
-
-            用 `opkg print-architecture` 查看架构；若架构名不完全匹配可加
-            `--force-architecture`（二进制为静态 musl，兼容同 CPU 家族）。
-
-            > mips/mipsel（如 MT7621、ath79）为 tier-3 目标，属实验性构建，可能缺席。
+          body_path: release-notes.md
