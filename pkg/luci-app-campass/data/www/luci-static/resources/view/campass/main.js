@@ -16,6 +16,7 @@ var callClearLog     = rpc.declare({ object: 'campass', method: 'clearlog' });
 var callSwitch       = rpc.declare({ object: 'campass', method: 'switch', params: [ 'section' ] });
 var callSwitchStatus = rpc.declare({ object: 'campass', method: 'switchstatus' });
 var callProbe        = rpc.declare({ object: 'campass', method: 'probe' });
+var callSession      = rpc.declare({ object: 'campass', method: 'session' });
 var callAuth         = rpc.declare({ object: 'campass', method: 'auth' });
 var callClearAuth    = rpc.declare({ object: 'campass', method: 'clearauth' });
 
@@ -49,7 +50,11 @@ var CSS = '' +
 '.cps-rec > summary::-webkit-details-marker { display:none }' +
 '.cps-rec[open] > summary { font-weight:600 }' +
 '.cps-dot { width:7px; height:7px; border-radius:50%; flex:none }' +
-'.cps-rec-body { padding:0 10px 10px 25px }';
+'.cps-rec-body { padding:0 10px 10px 25px }' +
+'.cps-kv { display:grid; grid-template-columns:auto 1fr; gap:0; padding:10px }' +
+'.cps-kv > div { padding:6px 12px; border-bottom:1px solid rgba(128,128,128,.15) }' +
+'.cps-kv > div:nth-child(4n+1), .cps-kv > div:nth-child(4n+2) { background:rgba(128,128,128,.05) }' +
+'.cps-kv .k { font-weight:600; white-space:nowrap; opacity:.85 }';
 
 function fmtTs(ts) {
 	ts = parseInt(ts || 0);
@@ -172,6 +177,75 @@ function renderAuth(records) {
 	}));
 }
 
+// ---- 会话信息换算(纯展示) ----
+var U32_MAX = 4294967295;  // 0xFFFFFFFF, drcom 里表示"不限/无上限"
+
+function fmtBytes(n) {
+	n = Number(n);
+	if (!isFinite(n) || n < 0) return '-';
+	if (n === U32_MAX) return _('不限');
+	var u = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0;
+	while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+	return (i === 0 ? n : n.toFixed(2)) + ' ' + u[i];
+}
+
+function fmtDuration(sec) {
+	sec = Number(sec);
+	if (!isFinite(sec) || sec < 0) return '-';
+	if (sec === U32_MAX) return _('不限');
+	var d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600),
+	    m = Math.floor(sec % 3600 / 60);
+	var out = [];
+	if (d) out.push(d + _('天'));
+	if (h) out.push(h + _('小时'));
+	if (m || !out.length) out.push(m + _('分'));
+	return out.join('');
+}
+
+var ISP = { '0': _('校园网/未分配'), '1': _('电信'), '2': _('移动'), '3': _('联通'), '4': _('广电') };
+var ZXOPT = {
+	'1': _('普通'), '2': _('专线(不可用)'), '4': _('专线(不可用)'),
+	'5': _('专线(不可用)'), '6': _('专线(可用)'), '9': _('专线(可用)')
+};
+
+function renderSession(sess) {
+	sess = sess || {};
+	var f = sess.fields || {};
+	var online = (sess.online === true || sess.online === 1);
+	if (!online || !f || typeof f !== 'object')
+		return E('em', { 'class': 'cps-empty' },
+			online ? _('(网关未返回会话信息)') : _('(当前离线, 无会话信息)'));
+
+	var fee = Number(f.fee);
+	var feeStr = isFinite(fee) ? (fee / 100).toFixed(2) + ' ' + _('元') : '-';
+	// 累计上下行: nd1/nu1 优先, 退回 actdf/actuf
+	var down = (f.nd1 != null ? f.nd1 : f.actdf);
+	var up   = (f.nu1 != null ? f.nu1 : f.actuf);
+
+	var rows = [
+		[_('账号'),        sess.account || f.uid || '-'],
+		[_('欠费'),        feeStr, isFinite(fee) && fee > 0 ? '#dc2626' : ''],
+		[_('运营商'),      ISP[String(f.ispid)] || ('ispid=' + f.ispid)],
+		[_('剩余时长'),    fmtDuration(f.oltime)],
+		[_('剩余流量'),    fmtBytes(f.olflow)],
+		[_('本次在线'),    fmtDuration(f.actt)],
+		[_('本次/累计下行'), fmtBytes(f.actdf) + ' / ' + fmtBytes(down)],
+		[_('本次/累计上行'), fmtBytes(f.actuf) + ' / ' + fmtBytes(up)],
+		[_('套餐(NID)'),   (f.NID === '' || f.NID == null) ? _('(空)') : String(f.NID)],
+		[_('专线状态'),    ZXOPT[String(f.zxopt)] || ('zxopt=' + f.zxopt)],
+		[_('IPv4'),        f.v4ip || f.ss5 || '-'],
+		[_('IPv6'),        (f.v6ip && f.v6ip !== '0000:0000:0000:0000:0000:0000:0000:0000') ? f.v6ip : '-'],
+		[_('在线序号'),    f.aolno != null ? String(f.aolno) : '-']
+	];
+	var grid = E('div', { 'class': 'cps-kv' });
+	rows.forEach(function (r) {
+		grid.appendChild(E('div', { 'class': 'k' }, r[0]));
+		grid.appendChild(E('div', r[2] ? { 'style': 'color:' + r[2] + ';font-weight:600' } : {},
+			'' + r[1]));
+	});
+	return grid;
+}
+
 return view.extend({
 	load: function () {
 		return Promise.all([
@@ -180,7 +254,8 @@ return view.extend({
 			callStatus().catch(function () { return {}; }),
 			callLog().catch(function () { return {}; }),
 			callSwitchStatus().catch(function () { return {}; }),
-			callAuth().catch(function () { return {}; })
+			callAuth().catch(function () { return {}; }),
+			callSession().catch(function () { return {}; })
 		]);
 	},
 
@@ -190,25 +265,28 @@ return view.extend({
 		var logText = (data && data[3] && data[3].log) || '';
 		var sw0 = (data && data[4]) || {};
 		var auth0 = (data && data[5] && data[5].records) || [];
+		var sess0 = (data && data[6]) || {};
 		var curActive = st.active || '';   // 引擎侧的当前账号(切换后由 status 刷新)
 
 		var statusBox = E('div', {}, renderStatus(st));
 		var switchBox = E('div', { 'hidden': true });
 		renderSwitchState(switchBox, sw0);
 
-		// ---------------- 诊断面板: 日志 / 认证响应 两个页签 ----------------
+		// ---------------- 诊断面板: 会话 / 日志 / 认证响应 三个页签 ----------------
+		var sessBox = E('div', {}, renderSession(sess0));
 		var logBox  = E('pre', { 'class': 'cps-mono' }, logText.trim() || _('(暂无日志)'));
 		var authBox = E('div', {}, renderAuth(auth0));
-		var logPane  = E('div', { 'class': 'cps-pane' }, logBox);
-		var authPane = E('div', { 'class': 'cps-pane', 'hidden': true }, authBox);
-		var curTab = 'log';
 
+		function refreshSession() {
+			return callSession().then(function (r) {
+				dom.content(sessBox, renderSession(r || {}));
+			}).catch(function () {});
+		}
 		function refreshLog() {
 			return callLog().then(function (r) {
 				dom.content(logBox, (r && r.log ? r.log.trim() : '') || _('(暂无日志)'));
 			}).catch(function () {});
 		}
-
 		function refreshAuth() {
 			return callAuth().then(function (r) {
 				dom.content(authBox, renderAuth((r && r.records) || []));
@@ -269,37 +347,52 @@ return view.extend({
 			});
 		}
 
-		var tabLog  = E('button', { 'type': 'button', 'class': 'cps-tab is-active' }, _('运行日志'));
-		var tabAuth = E('button', { 'type': 'button', 'class': 'cps-tab' }, _('认证响应'));
+		// 数据驱动的页签: id / 标题 / 面板 / 刷新函数 / 可选清空 / 提示
+		var TABS = [
+			{ id: 'session', label: _('会话信息'), box: sessBox, refresh: refreshSession,
+			  note: _('当前账号的欠费、剩余时长/流量、本次与累计用量, 来自网关实时返回') },
+			{ id: 'log', label: _('运行日志'), box: logBox, refresh: refreshLog,
+			  clear: callClearLog, note: _('引擎运行日志, 最多 300 行') },
+			{ id: 'auth', label: _('认证响应'), box: authBox, refresh: refreshAuth,
+			  clear: callClearAuth,
+			  note: _('最近 30 条登录/注销/解绑的原始返回(含切换与回滚全过程), 点条目展开') }
+		];
+		var curTab = TABS[0];
+		var paneWrap = E('div', {});
+		var noteEl = E('span', { 'class': 'cps-note' }, curTab.note);
+		var clearBtn = E('button', { 'class': 'btn cbi-button cbi-button-remove' }, _('清空'));
+		var tabBtns = TABS.map(function (t) {
+			t.btn = E('button', { 'type': 'button',
+				'class': 'cps-tab' + (t === curTab ? ' is-active' : '') }, t.label);
+			t.pane = E('div', { 'class': 'cps-pane', 'hidden': t !== curTab }, t.box);
+			t.btn.addEventListener('click', function () { selectTab(t); });
+			paneWrap.appendChild(t.pane);
+			return t.btn;
+		});
 
-		function selectTab(name) {
-			curTab = name;
-			var isLog = (name === 'log');
-			tabLog.className  = 'cps-tab' + (isLog ? ' is-active' : '');
-			tabAuth.className = 'cps-tab' + (isLog ? '' : ' is-active');
-			logPane.hidden  = !isLog;
-			authPane.hidden = isLog;
-			return isLog ? refreshLog() : refreshAuth();
+		function selectTab(t) {
+			curTab = t;
+			TABS.forEach(function (x) {
+				x.btn.className = 'cps-tab' + (x === t ? ' is-active' : '');
+				x.pane.hidden = (x !== t);
+			});
+			clearBtn.hidden = !t.clear;
+			dom.content(noteEl, t.note);
+			return t.refresh();
 		}
-		tabLog.addEventListener('click', function () { selectTab('log'); });
-		tabAuth.addEventListener('click', function () { selectTab('auth'); });
+		clearBtn.hidden = !curTab.clear;
+		clearBtn.addEventListener('click', ui.createHandlerFn(self, function () {
+			if (curTab.clear) return curTab.clear().then(curTab.refresh);
+		}));
 
 		var diagBar = E('div', { 'class': 'cps-bar', 'style': 'margin-top:8px' }, [
 			E('button', { 'class': 'btn cbi-button',
-				'click': ui.createHandlerFn(self, function () {
-					return curTab === 'log' ? refreshLog() : refreshAuth();
-				}) }, _('刷新')),
-			E('button', { 'class': 'btn cbi-button cbi-button-remove',
-				'click': ui.createHandlerFn(self, function () {
-					return curTab === 'log'
-						? callClearLog().then(refreshLog)
-						: callClearAuth().then(refreshAuth);
-				}) }, _('清空')),
+				'click': ui.createHandlerFn(self, function () { return curTab.refresh(); }) }, _('刷新')),
+			clearBtn,
 			E('button', { 'class': 'btn cbi-button',
 				'click': ui.createHandlerFn(self, function () { return runProbe(); }) }, _('测试连通性')),
 			E('span', { 'class': 'cps-spacer' }),
-			E('span', { 'class': 'cps-note' },
-				_('认证响应保存最近 30 条登录/注销/解绑的原始返回, 点条目展开'))
+			noteEl
 		]);
 
 		poll.add(function () {
@@ -309,7 +402,7 @@ return view.extend({
 					if (r && r.active) curActive = r.active;
 				}).catch(function () {}),
 				refreshSwitch(),
-				curTab === 'log' ? refreshLog() : refreshAuth()
+				curTab.refresh()
 			]);
 		}, 10);
 
@@ -317,6 +410,7 @@ return view.extend({
 			dom.content(statusBox, renderStatus(res || {}));
 			refreshLog();
 			refreshAuth();
+			refreshSession();
 			ui.addNotification(null, E('p', (res && res.message) || _('已执行')), 'info');
 		}
 
@@ -411,6 +505,7 @@ return view.extend({
 				renderSwitchState(switchBox, r);
 				refreshLog();
 				refreshAuth();
+				refreshSession();
 				ui.addNotification(null, E('p', r.message || _('切换已结束')),
 					r.state === 'ok' ? 'info' : 'warning');
 				// active 已由引擎写入 UCI, 重新载入, 免得页面上的旧值把它盖回去
@@ -515,8 +610,8 @@ return view.extend({
 		ds.render = function () {
 			return E('div', { 'class': 'cbi-section' }, [
 				E('h3', _('诊断')),
-				E('div', { 'class': 'cps-tabs' }, [ tabLog, tabAuth ]),
-				logPane, authPane, diagBar
+				E('div', { 'class': 'cps-tabs' }, tabBtns),
+				paneWrap, diagBar
 			]);
 		};
 
@@ -597,7 +692,7 @@ return view.extend({
 
 		// 账号列表
 		var a = m.section(form.GridSection, 'account', _('账号列表'),
-			_('学号/运营商/密码分开填, 后缀由脚本自动拼接, 不要把 @ 加进密码。切换当前账号请用上面的“切换到”。'));
+			_('学号/运营商/密码分开填, 运营商后缀由脚本自动拼接。切换当前账号请用上面的“切换到”。'));
 		a.addremove = true;
 		a.anonymous = false;
 		a.nodescriptions = true;

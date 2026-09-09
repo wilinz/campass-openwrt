@@ -1085,6 +1085,28 @@ fn cmd_switch(to: &str) {
 }
 
 /// 手动跑一次连通性探测, 排查探测目标配得对不对
+/// 会话信息: chkstatus 的完整解析结果 + 当前账号, 供 LuCI"会话"页显示。
+/// 换算(字节->MB、分->元、秒->时)放到界面做, 引擎只负责取数与透传原始字段。
+fn cmd_session() {
+    let g = load_global();
+    let raw = http_get(&format!("http://{}/drcom/chkstatus?callback=cb", g.gateway));
+    let fields = parse_jsonp(&raw).unwrap_or(Value::Null);
+    let online = fields.as_object().map(|_| is_result1(&fields)).unwrap_or(false);
+    let (name, full) = load_account(&g.active)
+        .map(|a| (a.label(), a.full()))
+        .unwrap_or_default();
+    println!(
+        "{}",
+        json!({
+            "online": online,
+            "active": g.active,
+            "account_name": name,
+            "account": full,
+            "fields": fields,
+        })
+    );
+}
+
 fn cmd_probe() {
     let g = load_global();
     let (ok, how) = probe_once(&g);
@@ -1213,6 +1235,22 @@ fn write_watchdog_ok(ts: u64) {
 }
 
 /// 登录后在 window 秒内反复探测, 确认真的能上网
+/// 从登录响应里嗅探"明确欠费"。只用于快速否决(跳过 20s 探测直接换下一个号),
+/// 绝不用于放行 —— 判据不命中时仍老老实实探测。
+///
+/// 权威依据(见 10.0.1.5 门户 a41.js): 官方客户端判"在线"只看 result==1,
+/// 根本不解析 ufee/oltime 这些字段 —— 它们只是成功页/注销页上给人看的显示项,
+/// 所以"能不能上网"的地面真值只能靠探测。这里唯一敢做否决的是 ufee: 它是
+/// 欠费金额(分), 语义无歧义(在线好号的页面 fee='0'), 命中即确定欠费。
+/// oltime/olflow 之类不敢用来否决 —— 样本太少, 万一误判会把好号也跳过。
+fn arrears_reason(raw: &str) -> Option<String> {
+    let v = parse_jsonp(raw)?;
+    match v.get("ufee").and_then(Value::as_i64) {
+        Some(fee) if fee > 0 => Some(format!("欠费 {:.2} 元 (ufee={fee})", fee as f64 / 100.0)),
+        _ => None,
+    }
+}
+
 fn verify_connectivity(g: &Global, window: u64) -> bool {
     std::thread::sleep(Duration::from_secs(PROBE_GRACE));
     let deadline = now_ts() + window;
@@ -1235,7 +1273,12 @@ fn try_account(g: &Global, sec: &str, action: &str) -> bool {
             if !r.online {
                 return false;
             }
-            // 登录成功不等于能上网: 欠费/封号常常照样返回 result=1
+            // 登录成功不等于能上网: 欠费/封号常照样返回 result=1。
+            // 响应里若有明确欠费特征, 快速否决(不等 20s 探测); 否则仍探测。
+            if let Some(why) = arrears_reason(&r.raw) {
+                log_line(&format!("{} ({}) 登录成功但{}, 判为不可用", a.label(), sec, why));
+                return false;
+            }
             verify_connectivity(g, WATCHDOG_VERIFY_WINDOW)
         }
         None => false,
@@ -1362,6 +1405,7 @@ fn main() {
         "clearauth" => cmd_clearauth(),
         "switchstatus" => cmd_switchstatus(),
         "probe" => cmd_probe(),
+        "session" => cmd_session(),
         // 手动跑一次看门狗检查(平时由 daemon 按 watchdog_interval 调度)
         "watchdog" => {
             let g = load_global();
@@ -1377,7 +1421,7 @@ fn main() {
         },
         other => {
             eprintln!(
-                "usage: campass [login|logout|unbind|switch <sec>|switchstatus|probe|watchdog|status|accounts|auth|clearauth|daemon|log|clearlog]  (unknown: {other})"
+                "usage: campass [login|logout|unbind|switch <sec>|switchstatus|probe|session|watchdog|status|accounts|auth|clearauth|daemon|log|clearlog]  (unknown: {other})"
             );
             std::process::exit(1);
         }

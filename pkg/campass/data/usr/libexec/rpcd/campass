@@ -4,7 +4,7 @@
 # 所以后台拉起, 立刻返回当前进度; LuCI 轮询 switchstatus 看结果。
 case "$1" in
 	list)
-		echo '{ "status": {}, "login": {}, "logout": {}, "unbind": {}, "log": {}, "clearlog": {}, "accounts": {}, "switch": { "section": "str" }, "switchstatus": {}, "probe": {}, "auth": {}, "clearauth": {} }'
+		echo '{ "status": {}, "login": {}, "logout": {}, "unbind": {}, "log": {}, "clearlog": {}, "accounts": {}, "switch": { "section": "str" }, "switchstatus": {}, "probe": {}, "session": {}, "auth": {}, "clearauth": {} }'
 		;;
 	call)
 		case "$2" in
@@ -50,6 +50,9 @@ case "$1" in
 			probe)
 				# v6 是黑洞时要等连接/读超时, 可能十几秒
 				/usr/bin/campass probe
+				;;
+			session)
+				/usr/bin/campass session
 				;;
 			auth)
 				/usr/bin/campass auth
