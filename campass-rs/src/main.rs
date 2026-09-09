@@ -17,6 +17,13 @@ use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const TIMEOUT_SECS: u64 = 5;
+/// 登录单独给更长的超时: 实测网关在线时 0s 就回, 但登出后的离线状态下
+/// /drcom/login 会明显变慢, 5s 不够, 会被误判成"登录失败"。
+const LOGIN_TIMEOUT_SECS: u64 = 15;
+/// 注销后等一会儿再登录, 给网关一点状态收敛时间
+const POST_LOGOUT_SETTLE: u64 = 3;
+/// 登录失败(含空响应)后的重试间隔
+const LOGIN_RETRY_GAP: u64 = 3;
 const UA: &str = "Mozilla/5.0 (X11; Linux x86_64) campass-rs/1.0";
 const LAST_LOGIN_FILE: &str = "/tmp/campass.lastlogin";
 const LOG_FILE: &str = "/tmp/campass.log";
@@ -171,14 +178,20 @@ fn load_account(section: &str) -> Option<Account> {
 }
 
 // ---------------- HTTP ----------------
-fn http_get(url: &str) -> String {
+fn http_get_timeout(url: &str, timeout: u64) -> String {
     minreq::get(url)
         .with_header("User-Agent", UA)
-        .with_timeout(TIMEOUT_SECS)
+        .with_timeout(timeout)
         .send()
         .ok()
-        .and_then(|r| r.as_str().map(|s| s.to_string()).ok())
+        // 用 lossy 而不是 as_str(): 网关的错误页可能是 GBK, as_str() 会直接
+        // 判失败返回空串, 那样记录里看到的"空响应"就分不清是网络挂了还是编码问题
+        .map(|r| String::from_utf8_lossy(r.as_bytes()).into_owned())
         .unwrap_or_default()
+}
+
+fn http_get(url: &str) -> String {
+    http_get_timeout(url, TIMEOUT_SECS)
 }
 
 /// 解析 JSONP: `dr1004({...})` -> serde_json::Value
@@ -333,15 +346,23 @@ fn do_login(g: &Global, a: &Account, force: bool) -> LoginResult {
 &R1=0&R2=&R3=0&R6=0&para=00&v4ip={v4ip}&v6ip={v6ip}\
 &terminal_type=1&lang=zh-cn&jsVersion=4.2"
         );
-        let body = http_get(&url);
+        let body = http_get_timeout(&url, LOGIN_TIMEOUT_SECS);
         resp = parse_jsonp(&body).unwrap_or(Value::Null);
         raw = body.clone();
         let msg = resp.get("msga").and_then(Value::as_str).unwrap_or("");
         if is_result1(&resp) || body.contains("clientip online") {
             break;
         }
-        if msg.to_lowercase().contains("imeout") && attempt < 2 {
-            std::thread::sleep(Duration::from_secs(3));
+        // 空响应 = 请求超时/连不上, 恰恰最该重试:
+        // 实测登出后网关会短暂不响应 /drcom/login, 不重试就会误判成账号有问题
+        let transient = body.trim().is_empty() || msg.to_lowercase().contains("imeout");
+        if transient && attempt < 2 {
+            log_line(&format!(
+                "登录无响应或超时, {}s 后重试 ({}/3)",
+                LOGIN_RETRY_GAP,
+                attempt + 2
+            ));
+            std::thread::sleep(Duration::from_secs(LOGIN_RETRY_GAP));
             continue;
         }
         break;
@@ -356,10 +377,12 @@ fn do_login(g: &Global, a: &Account, force: bool) -> LoginResult {
         .to_string();
     let message = if ok {
         format!("登录成功 ({})", a.name)
-    } else if msg.is_empty() {
-        "登录失败".into()
-    } else {
+    } else if !msg.is_empty() {
         format!("登录失败: {msg}")
+    } else if raw.trim().is_empty() {
+        "登录失败: 网关无响应(重试 3 次仍超时)".into()
+    } else {
+        format!("登录失败: 网关返回 {}", raw.trim())
     };
 
     LoginResult {
@@ -909,6 +932,7 @@ fn do_switch(to: &str) {
     record_auth("switch-unbind", &from, &from_full, r.ok, &r.message, &r.raw);
     let r = logout_action(&g);
     record_auth("switch-logout", &from, &from_full, r.ok, &r.message, &r.raw);
+    std::thread::sleep(Duration::from_secs(POST_LOGOUT_SETTLE));
 
     // 2) 切 active 并登录新账号(强制, 不因残留在线而跳过)
     if !set_active(to) {
@@ -989,6 +1013,7 @@ fn rollback<F: Fn(&str, &str)>(g: &Global, from: &str, from_name: &str, reason: 
     record_auth("rollback-unbind", &g.active, &cur_full, r.ok, &r.message, &r.raw);
     let r = logout_action(g);
     record_auth("rollback-logout", &g.active, &cur_full, r.ok, &r.message, &r.raw);
+    std::thread::sleep(Duration::from_secs(POST_LOGOUT_SETTLE));
 
     if !set_active(from) {
         let msg = format!("{reason}; 回滚失败: 写回 UCI active 出错");
@@ -1245,6 +1270,7 @@ fn watchdog_tick(g: &Global) {
     record_auth("watchdog-unbind", &g.active, &cur_full, r.ok, &r.message, &r.raw);
     let r = logout_action(g);
     record_auth("watchdog-logout", &g.active, &cur_full, r.ok, &r.message, &r.raw);
+    std::thread::sleep(Duration::from_secs(POST_LOGOUT_SETTLE));
 
     // 1) 先用当前账号恢复
     if try_account(g, &g.active, "watchdog-login") {

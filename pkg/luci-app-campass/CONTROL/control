@@ -1,5 +1,5 @@
 Package: luci-app-campass
-Version: 1.5.1
+Version: 1.6.0
 Architecture: all
 Maintainer: wilinz
 Section: luci
