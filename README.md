@@ -45,18 +45,28 @@ docs/                  截图
 
 ## 安装
 
-**方式一：下载预编译包（推荐）**
+**方式一：在路由器上直接下载安装（推荐）**
+
+ssh 进路由器，整段粘贴即可——自动认架构、下载、安装、清理：
 
 ```sh
-opkg print-architecture                       # 先查本机架构（如 mipsel_24kc）
+VER=1.9.0
+ARCH=$(opkg print-architecture | awk '$1=="arch" && $2!="all" && $2!="noarch" {print $2, $3}' \
+       | sort -k2 -nr | head -1 | cut -d' ' -f1)
+BASE=https://github.com/wilinz/campass-openwrt/releases/download/v$VER
+
+cd /tmp && \
+wget -O campass.ipk  "$BASE/campass_${VER}_${ARCH}.ipk" && \
+wget -O luci-app.ipk "$BASE/luci-app-campass_${VER}_all.ipk" && \
+opkg install campass.ipk luci-app.ipk; \
+rm -f campass.ipk luci-app.ipk
 ```
 
-从 [Releases](https://github.com/wilinz/campass-openwrt/releases) 下载对应架构的 `campass_*_<架构>.ipk` 和架构无关的 `luci-app-campass_*_all.ipk`：
+> - `ARCH` 那行取的是 `opkg print-architecture` 里优先级最高的具体架构（排除 `all` / `noarch`）。想手动指定就直接写，例如 `ARCH=mipsel_24kc`。
+> - 架构名不完全匹配时给 `opkg install` 加 `--force-architecture`——引擎是静态 musl 二进制，同 CPU 家族通用。
+> - `wget` 在 OpenWrt 上通常是 `uclient-fetch`。若报 https 相关错误，先装证书：`opkg update && opkg install ca-bundle libustream-mbedtls`。
 
-```sh
-opkg install campass_*_<你的架构>.ipk luci-app-campass_*_all.ipk
-# 架构名不完全匹配时可加 --force-architecture（二进制静态 musl，兼容同 CPU 家族）
-```
+也可以自己去 [Releases](https://github.com/wilinz/campass-openwrt/releases) 挑对应架构的 `campass_*_<架构>.ipk` 和架构无关的 `luci-app-campass_*_all.ipk` 下载后 `opkg install`。
 
 **方式二：本地构建后推送**
 
