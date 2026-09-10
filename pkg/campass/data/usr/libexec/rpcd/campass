@@ -26,6 +26,12 @@ case "$1" in
 			accounts)
 				/usr/bin/campass accounts
 				;;
+			log)
+				/usr/bin/campass log
+				;;
+			clearlog)
+				/usr/bin/campass clearlog
+				;;
 			switch)
 				# 入参 JSON 从 stdin 读: { "section": "xxx" }
 				. /usr/share/libubox/jshn.sh

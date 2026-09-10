@@ -9,6 +9,28 @@
 		uci -q set campass.global.watchdog_failover='1'
 		uci commit campass
 	}
+	# 恢复阈值从"秒"改为"连续探测失败次数": 老配置按 ceil(阈值/探测间隔) 折算,
+	# 折算后删掉旧键, 免得配置里留个已经没人读的 watchdog_threshold
+	[ -n "$(uci -q get campass.global.watchdog_fails)" ] || {
+		old_th="$(uci -q get campass.global.watchdog_threshold)"
+		old_iv="$(uci -q get campass.global.watchdog_interval)"
+		n=3
+		if [ -n "$old_th" ] && [ -n "$old_iv" ] && [ "$old_iv" -gt 0 ] 2>/dev/null; then
+			n=$(( (old_th + old_iv - 1) / old_iv ))
+			[ "$n" -lt 1 ] && n=1
+		fi
+		uci -q set campass.global.watchdog_fails="$n"
+		uci -q delete campass.global.watchdog_threshold
+		uci commit campass
+	}
+	[ -n "$(uci -q get campass.global.log_max_lines)" ] || {
+		uci -q set campass.global.log_max_lines='2000'
+		uci commit campass
+	}
+	[ -n "$(uci -q get campass.global.probe_family)" ] || {
+		uci -q set campass.global.probe_family='any'
+		uci commit campass
+	}
 	[ -n "$(uci -q get campass.global.probe_url)" ] || {
 		uci -q add_list campass.global.probe_url='https://www.baidu.com'
 		uci -q add_list campass.global.probe_url='https://www.qq.com'

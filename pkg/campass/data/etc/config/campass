@@ -10,9 +10,11 @@ config campass 'global'
 	# 可写多条, 按序试, 任一通过即算通; 建议放两个不同家的站点防单站故障误判。
 	list probe_url 'https://www.baidu.com'
 	list probe_url 'https://www.qq.com'
-	option watchdog_threshold '300'
+	option log_max_lines '2000'  # 运行日志保留行数(50-10000), 超出丢最旧的
+	option probe_family 'any'   # any/v4/v6: 探测限定地址族, any=两族任一通过
+	option watchdog_fails '3'      # 连续多少次探测失败才恢复(1-100)
 	option watchdog_failover '1'   # 恢复失败时自动改用列表里其他账号(封号/欠费自救)
-	option watchdog_interval '60'
+	option watchdog_interval '120'
 	option switch_timeout '120'
 	option block_lan '0'
 	option block_zone 'lan'

@@ -28,6 +28,9 @@ var CSS = '' +
 	' white-space:nowrap }' +
 '.cps-meta { display:flex; gap:16px; flex-wrap:wrap; opacity:.72; font-size:12px }' +
 '.cps-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap }' +
+// 主题给 button 定了 display:block, 优先级高过浏览器默认的 [hidden]{display:none},
+// 于是 .hidden=true 的按钮照样显示(会话信息页签下的"清空"就是这么冒出来的)
+'.cps-bar button[hidden] { display:none }' +
 '.cps-bar .cps-spacer { flex:1 1 auto; min-width:0 }' +
 '.cps-note { margin:0; opacity:.7; font-size:12px }' +
 '.cps-progress { padding:8px 12px; border-radius:4px; border-left:3px solid #2563eb;' +
@@ -35,12 +38,18 @@ var CSS = '' +
 '.cps-progress.is-warn { border-left-color:#b45309 }' +
 '.cps-progress.is-bad { border-left-color:#dc2626 }' +
 '.cps-progress.is-good { border-left-color:#16a34a }' +
+// 三个页签的内容都是直接顶到 section 底边的, 紧贴着"保存并应用"那条页脚, 补一点空隙
+'.cps-top-pane { padding-bottom:16px }' +
+// 主题给 .cbi-section 定了 display, 会盖掉浏览器默认的 [hidden]{display:none}
+'.cps-top-pane[hidden] { display:none }' +
 '.cps-tabs { display:flex; gap:4px; border-bottom:1px solid rgba(128,128,128,.3) }' +
 '.cps-tab { padding:6px 14px; cursor:pointer; border:none; background:transparent; color:inherit;' +
 	' font-size:13px; border-bottom:2px solid transparent; opacity:.65 }' +
 '.cps-tab.is-active { opacity:1; font-weight:600; border-bottom-color:#2563eb }' +
 '.cps-pane { max-height:340px; overflow:auto; border:1px solid rgba(128,128,128,.3);' +
 	' border-radius:0 0 4px 4px; border-top:none }' +
+// 会话信息是定长的十几行, 全部铺开也就一屏, 套个内滚动区反而要滚两层
+'.cps-pane.is-full { max-height:none; overflow:visible }' +
 '.cps-mono { margin:0; padding:10px; background:transparent; color:inherit; white-space:pre-wrap;' +
 	' font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; line-height:1.5 }' +
 '.cps-empty { display:block; padding:12px; opacity:.6; font-size:13px }' +
@@ -55,6 +64,11 @@ var CSS = '' +
 '.cps-kv > div { padding:6px 12px; border-bottom:1px solid rgba(128,128,128,.15) }' +
 '.cps-kv > div:nth-child(4n+1), .cps-kv > div:nth-child(4n+2) { background:rgba(128,128,128,.05) }' +
 '.cps-kv .k { font-weight:600; white-space:nowrap; opacity:.85 }';
+
+// 顶部页签, 顺序必须跟 form.Map 里 section 的声明顺序一致。
+// 诊断并在"运行状态"里(同一个 section), 所以 TOP_DIAG 就是第 0 页。
+var TOP_TABS = [ _('运行状态'), _('全局设置'), _('账号列表') ];
+var TOP_DIAG = 0;
 
 function fmtTs(ts) {
 	ts = parseInt(ts || 0);
@@ -109,10 +123,15 @@ function isBusy(state) {
 }
 
 /// 切换进度: 空闲时整块隐藏, 不占版面
-function renderSwitchState(box, sw) {
+///
+/// showDone=true 才显示终态(成功/已回滚/失败)。switch.json 会一直留着上次
+/// 任务的结果, 页面一打开就贴一条几天前的"已回滚 ... 探测仍不通", 看着像刚
+/// 刚失败。所以终态只给本次页面会话自己发起的切换看; 进行中的状态不受限制,
+/// 别的终端(或刷新前)发起的切换仍要显示出来。
+function renderSwitchState(box, sw, showDone) {
 	sw = sw || {};
 	var s = SWITCH_STATES[sw.state];
-	if (!s) {
+	if (!s || (!isBusy(sw.state) && !showDone)) {
 		box.hidden = true;
 		return;
 	}
@@ -270,6 +289,8 @@ return view.extend({
 
 		var statusBox = E('div', {}, renderStatus(st));
 		var switchBox = E('div', { 'hidden': true });
+		// 本次页面会话有没有亲自发起过切换; 决定终态结果要不要留在页面上
+		var ownSwitch = false;
 		renderSwitchState(switchBox, sw0);
 
 		// ---------------- 诊断面板: 会话 / 日志 / 认证响应 三个页签 ----------------
@@ -282,9 +303,19 @@ return view.extend({
 				dom.content(sessBox, renderSession(r || {}));
 			}).catch(function () {});
 		}
+		var logSeen = false;   // 日志面板是否已经露过面(决定要不要强制拉到底)
 		function refreshLog() {
 			return callLog().then(function (r) {
+				// 日志是追加的, 最新一行在最底下。贴着底就跟着滚,
+				// 用户往上翻查旧记录时别把视图抢回去(每 10s 一次 poll)。
+				var pane = logBox.parentNode;
+				// 第一次显示要强制落到底: 此时 scrollTop 还是 0, 按"贴底"判会得 false,
+				// 于是停在几百行之前的开头, 最新的反而要手动滚下去找。
+				var atBottom = !pane || !logSeen ||
+					pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 4;
 				dom.content(logBox, (r && r.log ? r.log.trim() : '') || _('(暂无日志)'));
+				if (pane && atBottom) pane.scrollTop = pane.scrollHeight;
+				if (pane && pane.clientHeight) logSeen = true;   // 隐藏时高度为 0, 不算露面
 			}).catch(function () {});
 		}
 		function refreshAuth() {
@@ -295,32 +326,42 @@ return view.extend({
 
 		function refreshSwitch() {
 			return callSwitchStatus().then(function (r) {
-				renderSwitchState(switchBox, r || {});
+				renderSwitchState(switchBox, r || {}, ownSwitch);
 				return r || {};
 			}).catch(function () { return {}; });
 		}
 
 		// type=button: 免得在 form 里被当成提交按钮
-		// 连通性自检: 逐个 URL 分别报 v4 / v6, 便于定位单边故障
+		// 连通性自检: 跑的就是看门狗那套判据(含 probe_family 限定), 逐个 URL 分族报,
+		// 便于定位单边故障
 		function runProbe() {
 			ui.showModal(_('测试连通性'), [
-				E('p', { 'class': 'spinning' }, _('探测中... (v6 不通时要等超时, 可能十几秒)'))
+				E('p', { 'class': 'spinning' }, _('探测中... (有地址族不通时要等超时, 可能十几秒)'))
 			]);
 			return callProbe().then(function (r) {
 				r = r || {};
+				// 限定了地址族时引擎只探那一族, 另一族回 null; 列表跟着只列探过的
+				var fams = [
+					{ key: 'v4', label: 'IPv4' },
+					{ key: 'v6', label: 'IPv6' }
+				].filter(function (f) {
+					return !r.family || r.family === 'any' || r.family === f.key;
+				});
 				var rows = (r.detail || []).map(function (d) {
 					if (d.skipped)
 						return E('tr', { 'class': 'tr' }, [
 							E('td', { 'class': 'td left' }, d.url),
-							E('td', { 'class': 'td left', 'colspan': 2 }, E('em', {}, d.skipped))
+							E('td', { 'class': 'td left', 'colspan': fams.length },
+								E('em', {}, d.skipped))
 						]);
-					function cell(v) {
-						return E('td', { 'class': 'td left' },
-							badge(v ? _('通') : _('不通'), v ? '#16a34a' : '#dc2626'));
-					}
 					return E('tr', { 'class': 'tr' }, [
-						E('td', { 'class': 'td left' }, d.url), cell(d.v4), cell(d.v6)
-					]);
+						E('td', { 'class': 'td left' }, d.url)
+					].concat(fams.map(function (f) {
+						var v = d[f.key];
+						return E('td', { 'class': 'td left' }, (v === null || v === undefined)
+							? E('em', { 'style': 'opacity:.6' }, _('未探测'))
+							: badge(v ? _('通') : _('不通'), v ? '#16a34a' : '#dc2626'));
+					})));
 				});
 				ui.showModal(_('测试连通性'), [
 					E('p', { 'class': 'cps-head' }, [
@@ -331,13 +372,17 @@ return view.extend({
 					]),
 					E('table', { 'class': 'table', 'style': 'margin-top:10px' }, [
 						E('tr', { 'class': 'tr table-titles' }, [
-							E('th', { 'class': 'th left' }, _('探测地址')),
-							E('th', { 'class': 'th left' }, 'IPv4'),
-							E('th', { 'class': 'th left' }, 'IPv6')
-						])
+							E('th', { 'class': 'th left' }, _('探测地址'))
+						].concat(fams.map(function (f) {
+							return E('th', { 'class': 'th left' }, f.label);
+						})))
 					].concat(rows)),
 					E('p', { 'class': 'cps-note', 'style': 'margin-top:8px' },
-						_('任一地址族通过即算连通; 只有 https 条目计入判定。')),
+						// 这里跑的就是看门狗那套判据, 限定了地址族就只探那一族
+						(r.family && r.family !== 'any')
+							? _('已按“探测地址族”限定为') + ' ' + (r.family_label || r.family) +
+							  ', ' + _('仅探测该族; 仅 https 条目计入判定。')
+							: _('任一地址族通过即判定为连通; 仅 https 条目计入判定。')),
 					E('div', { 'class': 'right', 'style': 'margin-top:12px' },
 						E('button', { 'class': 'btn', 'click': ui.hideModal }, _('关闭')))
 				]);
@@ -350,12 +395,16 @@ return view.extend({
 		// 数据驱动的页签: id / 标题 / 面板 / 刷新函数 / 可选清空 / 提示
 		var TABS = [
 			{ id: 'session', label: _('会话信息'), box: sessBox, refresh: refreshSession,
-			  note: _('当前账号的欠费、剩余时长/流量、本次与累计用量, 来自网关实时返回') },
+			  full: true,
+			  note: _('当前账号的欠费、剩余时长与流量、本次及累计用量, 均来自网关实时返回。') },
 			{ id: 'log', label: _('运行日志'), box: logBox, refresh: refreshLog,
-			  clear: callClearLog, note: _('引擎运行日志, 最多 300 行') },
+			  clear: callClearLog,
+			  // 行数上限是可配的, 提示照 uci 的值写, 别写死一个数
+			  note: _('引擎运行日志, 最多') + ' ' +
+			        (uci.get('campass', 'global', 'log_max_lines') || '2000') + ' ' + _('行') },
 			{ id: 'auth', label: _('认证响应'), box: authBox, refresh: refreshAuth,
 			  clear: callClearAuth,
-			  note: _('最近 30 条登录/注销/解绑的原始返回(含切换与回滚全过程), 点条目展开') }
+			  note: _('最近 30 条登录 / 注销 / 解绑的原始返回(含切换与回滚全过程), 点击条目展开。') }
 		];
 		var curTab = TABS[0];
 		var paneWrap = E('div', {});
@@ -364,7 +413,11 @@ return view.extend({
 		var tabBtns = TABS.map(function (t) {
 			t.btn = E('button', { 'type': 'button',
 				'class': 'cps-tab' + (t === curTab ? ' is-active' : '') }, t.label);
-			t.pane = E('div', { 'class': 'cps-pane', 'hidden': t !== curTab }, t.box);
+			t.pane = E('div', { 'class': 'cps-pane' + (t.full ? ' is-full' : '') }, t.box);
+			// 必须走 DOM 属性: E() 是 setAttribute, hidden 又是布尔属性,
+			// 传 false 会渲染成 hidden="false" —— 照样隐藏, 默认选中的那个
+			// 页签就一直是空白的, 得手点一下(selectTab 里赋的是属性)才出来。
+			t.pane.hidden = (t !== curTab);
 			t.btn.addEventListener('click', function () { selectTab(t); });
 			paneWrap.appendChild(t.pane);
 			return t.btn;
@@ -395,6 +448,9 @@ return view.extend({
 			noteEl
 		]);
 
+		// 顶部页签当前停在哪一页(索引对应 TOP_TABS); 诊断没露面时就别白跑它的 rpc
+		var topIdx = 0;
+
 		poll.add(function () {
 			return Promise.all([
 				callStatus().then(function (r) {
@@ -402,7 +458,7 @@ return view.extend({
 					if (r && r.active) curActive = r.active;
 				}).catch(function () {}),
 				refreshSwitch(),
-				curTab.refresh()
+				topIdx === TOP_DIAG ? curTab.refresh() : Promise.resolve()
 			]);
 		}, 10);
 
@@ -467,8 +523,8 @@ return view.extend({
 			function tick() {
 				return callSwitchStatus().then(function (r) {
 					r = r || {};
-					renderSwitchState(box, r);
-					renderSwitchState(switchBox, r);
+					renderSwitchState(box, r, true);
+					renderSwitchState(switchBox, r, ownSwitch);
 					var fresh = (parseInt(r.started || 0) >= ref - 2);
 					var done  = fresh && r.running !== true && !isBusy(r.state);
 					if (done || Date.now() / 1000 > hardStop)
@@ -489,20 +545,21 @@ return view.extend({
 			ui.showModal(_('切换账号'), [
 				progress,
 				E('p', { 'class': 'cps-note', 'style': 'margin-top:10px' },
-					_('切换过程中路由器会短暂断网; 验证窗口内探测不通会自动回滚到原账号, 请勿关闭页面。'))
+					_('切换过程中路由器会短暂断网; 验证窗口内探测不通将自动回滚至原账号, 请勿关闭页面。'))
 			]);
+			ownSwitch = true;
 			return callSwitch(section).then(function (r0) {
 				r0 = r0 || {};
 				if (r0.error)
 					return Promise.reject(new Error(r0.error));
 				var ref = (r0.running === true && r0.started)
 					? parseInt(r0.started) : parseInt(r0.now || 0);
-				renderSwitchState(progress, r0);
+				renderSwitchState(progress, r0, true);
 				return waitSwitch(ref, progress);
 			}).then(function (r) {
 				r = r || {};
 				ui.hideModal();
-				renderSwitchState(switchBox, r);
+				renderSwitchState(switchBox, r, true);
 				refreshLog();
 				refreshAuth();
 				refreshSession();
@@ -540,14 +597,14 @@ return view.extend({
 			var target = accSelect.options[accSelect.selectedIndex].text;
 			ui.showModal(_('切换账号'), [
 				E('p', { 'style': 'color:#b45309' },
-					'⚠ ' + _('切换会先注销当前账号, 期间会短暂断网。')),
+					'⚠ ' + _('切换将先注销当前账号, 期间会短暂断网。')),
 				E('ol', { 'style': 'margin:8px 0 8px 20px' }, [
 					E('li', {}, _('解绑并注销当前账号')),
 					E('li', {}, _('切换到') + ' ' + target + ' ' + _('并登录')),
 					E('li', {}, timeout + 's ' + _('内反复 https 探测') + ' ' + host),
 					E('li', {}, _('若始终不通, 自动回滚到原账号并重新登录'))
 				]),
-				E('p', { 'class': 'cps-note' }, _('全过程的认证响应可在“认证响应”页签里查看。')),
+				E('p', { 'class': 'cps-note' }, _('全过程的认证响应可在“认证响应”页签中查看。')),
 				E('div', { 'class': 'right', 'style': 'margin-top:12px' }, [
 					E('button', { 'class': 'btn', 'click': ui.hideModal }, _('取消')),
 					' ',
@@ -584,10 +641,12 @@ return view.extend({
 			}, _('解绑'))
 		]);
 
-		var m = new form.Map('campass', _('Campass · 校园网自动登录'),
-			_('学号/运营商/密码分开填, 后缀自动拼接。启用后由内置定时器按间隔保活, 不使用 cron。'));
+		var m = new form.Map('campass', _('Campass · 校园网认证管理'),
+			_('学号、运营商与密码分开填写, 后缀自动拼接。启用后由内置定时器按间隔保活。'));
 
 		// 运行状态 + 账号切换 + 动作(合成一张卡, 切换进度按需出现)
+		// 状态与诊断合成一个 section: 都是"现在怎么样"的只读信息, 一个页签装得下,
+		// 也省得为了看日志再切一次页签
 		var ss = m.section(form.TypedSection, '_status');
 		ss.anonymous = true;
 		ss.render = function () {
@@ -598,57 +657,109 @@ return view.extend({
 					statusBox,
 					toolBar,
 					E('p', { 'class': 'cps-note' },
-						_('切换账号会用 https 探测验证连通性, 探测不通自动回滚; 立即生效, 无需“保存并应用”。')),
+						_('切换账号将通过 https 探测验证连通性, 探测不通则自动回滚; 立即生效, 无需“保存并应用”。')),
 					switchBox
-				])
-			]);
-		};
-
-		// 诊断: 运行日志 / 认证响应
-		var ds = m.section(form.TypedSection, '_diag');
-		ds.anonymous = true;
-		ds.render = function () {
-			return E('div', { 'class': 'cbi-section' }, [
-				E('h3', _('诊断')),
+				]),
+				E('h3', { 'style': 'margin-top:18px' }, _('诊断')),
 				E('div', { 'class': 'cps-tabs' }, tabBtns),
 				paneWrap, diagBar
 			]);
 		};
 
-		// 全局设置
+		// 全局设置: 十几个选项铺一页太长, 按用途分三个页签
 		var g = m.section(form.NamedSection, 'global', 'campass', _('全局设置'));
 		g.addremove = false;
+		g.tab('base', _('基本'));
+		g.tab('probe', _('探测与看门狗'));
+		g.tab('security', _('安全'));
 		var o;
 
-		o = g.option(form.Flag, 'enabled', _('启用自动登录'),
-			_('勾选并“保存并应用”后, 内置定时器开始按间隔保活'));
+		// ---- 基本 ----
+		o = g.taboption('base', form.Flag, 'enabled', _('启用'),
+			_('勾选并“保存并应用”后, 内置定时器将按间隔执行保活。'));
 		o.rmempty = false;
 
-		o = g.option(form.Value, 'interval', _('保活间隔(秒)'), _('内置定时器每隔多少秒检测并保活'));
+		o = g.taboption('base', form.Value, 'interval', _('保活间隔(秒)'),
+			_('按此周期向网关查询登录状态, 显示未登录则立即重新认证。' +
+			  '此项仅负责恢复掉线, 不检测网络是否实际可用 —— 网关返回在线即跳过。' +
+			  '实际连通性由「探测与看门狗」页签中的看门狗负责。默认 300'));
 		o.datatype = 'and(uinteger,min(30))';
 		o.placeholder = '300';
 
-		o = g.option(form.Value, 'gateway', _('网关地址'), _('留空则使用默认 10.0.1.5'));
+		o = g.taboption('base', form.Value, 'gateway', _('网关地址'),
+			_('留空则使用默认 10.0.1.5'));
 		o.datatype = 'host';
 		o.rmempty = true;
 		o.placeholder = '10.0.1.5';
 
-		o = g.option(form.Value, 'confirm_word', _('操作口令'),
-			_('执行“登出/解绑”前需输入此口令二次确认, 防误触'));
-		o.password = true;
-		o.rmempty = false;
+		o = g.taboption('base', form.Value, 'log_max_lines', _('运行日志上限(行)'),
+			_('超出后自最旧的行开始丢弃。日志存于 /tmp, 重启即清空。' +
+			  '整份日志需经 ubus 传回本页面显示, 故上限为 10000 行, 不宜设置过大。默认 2000'));
+		o.datatype = 'and(uinteger,min(50),max(10000))';
+		o.placeholder = '2000';
 
-		o = g.option(form.Value, 'switch_timeout', _('切换验证窗口(秒)'),
-			_('切换账号后, 在此时间内反复做 https 探测; 始终不通则回滚旧账号。默认 120'));
+		o = g.taboption('base', form.Value, 'switch_timeout', _('切换验证窗口(秒)'),
+			_('切换账号后, 在此时间内反复进行 https 探测; 始终不通则回滚至原账号。默认 120'));
 		o.datatype = 'and(uinteger,min(30),max(600))';
 		o.placeholder = '120';
 
-		o = g.option(form.Flag, 'block_lan', _('禁止 LAN 访问认证网关'),
-			_('开启后局域网用户无法直接访问认证网关(登出/换绑/篡改认证), 但仍可正常上网; 路由器自身登录不受影响。保存应用后自动写入防火墙规则。'));
+		// ---- 探测与看门狗 ----
+		o = g.taboption('probe', form.Flag, 'watchdog', _('网络看门狗'),
+			_('启用后按下方周期探测真实连通性; 连续失败达到设定次数即自动执行 解绑→注销→登录 恢复'));
 		o.rmempty = false;
 
-		o = g.option(form.ListValue, 'block_zone', _('拦截来源区域'),
-			_('要拦截的防火墙区域, 一般是 lan; 若你的内网口用了别的区域名请改这里'));
+		o = g.taboption('probe', form.DynamicList, 'probe_url', _('连通性探测地址'),
+			_('仅接受 https(含完整证书校验)。不采用 ping 与明文 http 作为判据: ' +
+			  '认证网关会代答 ICMP, 亦会劫持明文 http 返回门户页, 二者均可伪造“网络正常”的假象, ' +
+			  '而带证书校验的 https 无法伪造。可填写多条, 按顺序尝试, 任一通过即判定为连通; ' +
+			  '建议配置两个不同厂商的站点, 以免单站故障被误判为断网。'));
+		o.placeholder = 'https://www.baidu.com';
+
+		o = g.taboption('probe', form.ListValue, 'probe_family', _('探测地址族'),
+			_('探测时仅连接指定地址族。默认两族均尝试, 任一通过即算连通; ' +
+			  '若本机某一族不可用(如无 IPv6 出口), 限定为另一族可省去每轮一次必然失败的连接超时。' +
+			  '注意: 限定后该族一旦中断即判为断网, 看门狗将随之执行恢复。'));
+		o.value('any', _('IPv4 / IPv6 (默认, 任一通过)'));
+		o.value('v4', _('仅 IPv4'));
+		o.value('v6', _('仅 IPv6'));
+		o.default = 'any';
+
+		o = g.taboption('probe', form.Value, 'watchdog_interval', _('探测间隔(秒)'),
+			_('看门狗执行 https 连通性探测的周期, 用于判定网络是否实际可用。' +
+			  '与「基本」页签的保活间隔相互独立: 保活仅依据网关返回的登录状态, ' +
+			  '此项检测真实连通性, 可发现网关显示在线但实际无法访问外网的情形。' +
+			  '单次探测失败不会立即触发恢复, 需连续失败达到下方的“连续失败次数”。默认 120'));
+		o.datatype = 'and(uinteger,min(20))';
+		o.placeholder = '120';
+		o.depends('watchdog', '1');
+
+		o = g.taboption('probe', form.Value, 'watchdog_fails', _('连续失败次数'),
+			_('连续失败达到此次数后, 才执行 解绑→注销→登录 的恢复流程; ' +
+			  '其间任意一次探测通过即清零重新计数。' +
+			  '设置过小易被网络瞬时波动误触发, 过大则故障后恢复迟缓。默认 3'));
+		o.datatype = 'and(uinteger,min(1),max(100))';
+		o.placeholder = '3';
+		o.depends('watchdog', '1');
+
+		o = g.taboption('probe', form.Flag, 'watchdog_failover', _('恢复失败时换账号'),
+			_('当前账号重新登录后仍无法访问外网(封号、欠费或密码变更), ' +
+			  '则依次尝试账号列表中的其他账号; 成功者将被设为当前账号, 全部失败则还原为原账号。'));
+		o.default = '1';
+		o.rmempty = false;
+		o.depends('watchdog', '1');
+
+		// ---- 安全 ----
+		o = g.taboption('security', form.Value, 'confirm_word', _('操作口令'),
+			_('执行“登出 / 解绑”前需输入此口令二次确认, 以防误触。'));
+		o.password = true;
+		o.rmempty = false;
+
+		o = g.taboption('security', form.Flag, 'block_lan', _('禁止 LAN 访问认证网关'),
+			_('开启后局域网用户无法直接访问认证网关(登出、换绑或篡改认证), 但仍可正常上网; 路由器自身登录不受影响。保存并应用后将自动写入防火墙规则。'));
+		o.rmempty = false;
+
+		o = g.taboption('security', form.ListValue, 'block_zone', _('拦截来源区域'),
+			_('需要拦截的防火墙区域, 通常为 lan; 若内网接口使用其他区域名称, 请在此修改。'));
 		var zones = uci.sections('firewall', 'zone');
 		if (zones.length) {
 			zones.forEach(function (z) {
@@ -660,42 +771,17 @@ return view.extend({
 		o.default = 'lan';
 		o.depends('block_lan', '1');
 
-		o = g.option(form.Flag, 'watchdog', _('网络看门狗'),
-			_('连通性(https 探测)持续不通超过阈值时, 自动执行 解绑→注销→登录 恢复'));
-		o.rmempty = false;
-
-		o = g.option(form.DynamicList, 'probe_url', _('连通性探测地址'),
-			_('只认 https(完整证书校验)。不用 ping / http 判断, 是因为认证网关会代答 ICMP、' +
-			  '也会劫持明文 http 返回门户页, 两者都能伪造出“网络正常”的假象; ' +
-			  '带证书校验的 https 伪造不了。可写多条按序试, 任一通过即算连通, ' +
-			  '建议放两个不同家的站点, 免得单站故障被误判成断网。'));
-		o.placeholder = 'https://www.baidu.com';
-
-		o = g.option(form.Value, 'watchdog_interval', _('探测间隔(秒)'),
-			_('看门狗多久探测一次(独立于保活间隔)'));
-		o.datatype = 'and(uinteger,min(20))';
-		o.placeholder = '60';
-		o.depends('watchdog', '1');
-
-		o = g.option(form.Value, 'watchdog_threshold', _('恢复阈值(秒)'),
-			_('持续不通多少秒才触发恢复, 防抖动误触'));
-		o.datatype = 'and(uinteger,min(60))';
-		o.placeholder = '300';
-		o.depends('watchdog', '1');
-
-		o = g.option(form.Flag, 'watchdog_failover', _('恢复失败时换账号'),
-			_('当前账号重新登录后仍上不了网(封号/欠费/改了密码), 自动依次试账号列表里的其他账号; ' +
-			  '成功的那个会被设为当前账号。全都不行则还原为原账号。'));
-		o.default = '1';
-		o.rmempty = false;
-		o.depends('watchdog', '1');
-
 		// 账号列表
 		var a = m.section(form.GridSection, 'account', _('账号列表'),
-			_('学号/运营商/密码分开填, 运营商后缀由脚本自动拼接。切换当前账号请用上面的“切换到”。'));
+			_('学号、运营商与密码分开填写, 运营商后缀由引擎自动拼接。切换当前账号请使用上方的“切换到”。'));
 		a.addremove = true;
-		a.anonymous = false;
+		// 匿名 section: 点"添加"直接建, 不再先让用户起一个 UCI section 名 ——
+		// 那个名字只是内部标识, 对着填毫无意义。引擎按 type=account 枚举账号,
+		// 名字取自动生成的即可; 已有的 main / uXXXX 等命名 section 照常显示。
+		a.anonymous = true;
 		a.nodescriptions = true;
+		// 不设的话弹窗标题会沿用整页的标题, 看不出自己在编辑什么
+		a.modaltitle = function () { return _('账号'); };
 
 		o = a.option(form.Value, 'name', _('备注名'));
 		o.placeholder = _('如: 主号');
@@ -707,7 +793,7 @@ return view.extend({
 		// 引擎按此拼后缀: 空/校园网/campus => 无后缀; 以 @ 开头 => 原样; 否则补 @。
 		// 自定义时填后缀本身, 如 @abc 或 abc(都会得到 @abc), 校园网留空。
 		o = a.option(form.Value, 'isp', _('运营商'),
-			_('可选预设或直接填自定义后缀(如 @abc); 校园网留空'));
+			_('可选择预设, 或直接填写自定义后缀(如 @abc); 校园网留空。'));
 		o.value('telecom', _('电信'));
 		o.value('cmcc', _('移动'));
 		o.value('unicom', _('联通'));
@@ -719,6 +805,47 @@ return view.extend({
 		o.rmempty = false;
 		o.modalonly = true;   // 仅在编辑弹窗显示, 表格里不明文列出密码
 
-		return m.render();
+		// 四个 section 摞一页要滚好几屏, 渲染完再套一层顶部页签。
+		// form.Map 没有跨 section 的页签, 所以在产出的 DOM 上做: .cbi-map 下
+		// 的 .cbi-section 按顺序就是这四块, 逐个收进页签轮流显示。
+		return m.render().then(function (mapNode) {
+			var secs = Array.prototype.filter.call(mapNode.children, function (c) {
+				return c.classList.contains('cbi-section');
+			});
+			// 结构和预期对不上就原样返回, 宁可页面长一点也别渲染出个残页
+			if (secs.length !== TOP_TABS.length)
+				return mapNode;
+
+			// 用 LuCI 原生的 cbi-tabmenu 结构(ul > li.cbi-tab / li.cbi-tab-disabled),
+			// 样式交给主题, 跟系统里其他页面的页签长得一样
+			var btns = TOP_TABS.map(function (label, i) {
+				var a = E('a', { 'href': '#' }, label);
+				a.addEventListener('click', function (ev) {
+					ev.preventDefault();      // 否则会跳到 '#' 把页面滚到顶
+					selectTop(i);
+				});
+				return E('li', { 'class': 'cbi-tab-disabled' }, a);
+			});
+
+			function selectTop(i) {
+				topIdx = i;
+				secs.forEach(function (s, k) { s.hidden = (k !== i); });
+				btns.forEach(function (b, k) {
+					b.className = (k === i) ? 'cbi-tab' : 'cbi-tab-disabled';
+				});
+				// 诊断平时不轮询, 切过来先补一次, 免得看到十秒前的旧数据
+				if (i === TOP_DIAG) curTab.refresh();
+			}
+
+			secs.forEach(function (s) {
+				s.classList.add('cps-top-pane');
+				// 页签已经标了名字, 里面的标题再写一遍就重复了
+				var h = s.querySelector('h3');
+				if (h) h.hidden = true;
+			});
+			mapNode.insertBefore(E('ul', { 'class': 'cbi-tabmenu' }, btns), secs[0]);
+			selectTop(0);
+			return mapNode;
+		});
 	}
 });

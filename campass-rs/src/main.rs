@@ -27,7 +27,9 @@ const LOGIN_RETRY_GAP: u64 = 3;
 const UA: &str = "Mozilla/5.0 (X11; Linux x86_64) campass-rs/1.0";
 const LAST_LOGIN_FILE: &str = "/tmp/campass.lastlogin";
 const LOG_FILE: &str = "/tmp/campass.log";
-const LOG_MAX_LINES: usize = 300;
+const LOG_MAX_LINES_DEFAULT: usize = 2000;
+/// 上限的上限: 日志要整份经 ubus 送给 LuCI, 太大传不动也没法看
+const LOG_MAX_LINES_CAP: usize = 10000;
 
 /// 认证响应存档(登录/注销/解绑的原始返回), 供 LuCI 查看
 const AUTH_FILE: &str = "/tmp/campass.auth.json";
@@ -53,11 +55,12 @@ struct Global {
     interval: u64,
     gateway: String,
     watchdog: bool,
-    watchdog_threshold: u64,
+    watchdog_fails: u64,
     watchdog_interval: u64,
     switch_timeout: u64,
     watchdog_failover: bool,
     probe_urls: Vec<String>,
+    probe_family: Family,
 }
 
 struct Account {
@@ -129,13 +132,13 @@ fn load_global() -> Global {
             .max(30),
         gateway: if gw.is_empty() { "10.0.1.5".into() } else { gw },
         watchdog: uci_get("global", "watchdog") == "1",
-        watchdog_threshold: uci_get("global", "watchdog_threshold")
+        watchdog_fails: uci_get("global", "watchdog_fails")
             .parse::<u64>()
-            .unwrap_or(300)
-            .max(60),
+            .unwrap_or(3)
+            .clamp(1, 100),
         watchdog_interval: uci_get("global", "watchdog_interval")
             .parse::<u64>()
-            .unwrap_or(60)
+            .unwrap_or(120)
             .max(20),
         switch_timeout: uci_get("global", "switch_timeout")
             .parse::<u64>()
@@ -158,6 +161,7 @@ fn load_global() -> Global {
                 list
             }
         },
+        probe_family: Family::from_uci(&uci_get("global", "probe_family")),
     }
 }
 
@@ -238,16 +242,30 @@ fn ts_human() -> String {
         .unwrap_or_else(|| now_ts().to_string())
 }
 
-/// 追加一行日志到 LOG_FILE(限长 LOG_MAX_LINES), 同时打到 stdout(procd->syslog)
+/// 日志上限(行), 取自 UCI, 进程内只读一次。
+/// log_line 调用频繁, 每写一行都 fork 一次 uci 太浪费; 改了配置会触发 procd
+/// reload(init 里 reload_service 是 stop+start), 新值随守护进程重启生效。
+fn log_max_lines() -> usize {
+    static CACHE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *CACHE.get_or_init(|| {
+        uci_get("global", "log_max_lines")
+            .parse::<usize>()
+            .unwrap_or(LOG_MAX_LINES_DEFAULT)
+            .clamp(50, LOG_MAX_LINES_CAP)
+    })
+}
+
+/// 追加一行日志到 LOG_FILE(限长 log_max_lines), 同时打到 stdout(procd->syslog)
 fn log_line(msg: &str) {
     let line = format!("[{}] {}", ts_human(), msg);
     println!("{line}");
     let mut all = std::fs::read_to_string(LOG_FILE).unwrap_or_default();
     all.push_str(&line);
     all.push('\n');
+    let max = log_max_lines();
     let lines: Vec<&str> = all.lines().collect();
-    let out = if lines.len() > LOG_MAX_LINES {
-        let mut s = lines[lines.len() - LOG_MAX_LINES..].join("\n");
+    let out = if lines.len() > max {
+        let mut s = lines[lines.len() - max..].join("\n");
         s.push('\n');
         s
     } else {
@@ -551,6 +569,32 @@ impl Family {
             Family::V6 => a.is_ipv6(),
         }
     }
+
+    /// UCI 值 -> Family; 认不出的一律当 any(别因为配置写错就判成断网)
+    fn from_uci(s: &str) -> Family {
+        match s.trim() {
+            "v4" => Family::V4,
+            "v6" => Family::V6,
+            _ => Family::Any,
+        }
+    }
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            Family::Any => "any",
+            Family::V4 => "v4",
+            Family::V6 => "v6",
+        }
+    }
+
+    /// 展示文案, 进日志和 LuCI
+    fn label(&self) -> &'static str {
+        match self {
+            Family::Any => "IPv4/IPv6",
+            Family::V4 => "仅 IPv4",
+            Family::V6 => "仅 IPv6",
+        }
+    }
 }
 
 fn connect_addr(addr: &std::net::SocketAddr) -> Option<std::net::TcpStream> {
@@ -702,16 +746,30 @@ fn tls_verified_probe(host: &str, port: u16, path: &str, fam: Family) -> bool {
         Ok(n) => n,
         Err(_) => return false,
     };
-    let roots = rustls::RootCertStore {
-        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-    };
-    let config = rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    let config = Arc::new(config);
+    // 配置只建一次并常驻: rustls 默认带内存会话缓存, 复用配置才复用得上 TLS 会话。
+    // 每次重建等于每次都走全握手 —— 要重新下整条证书链再验一遍, 实测占了单次探测
+    // 流量的大头(HEAD 之后仍有 ~13.8KB)。daemon 是长驻进程, 后续探测可走简化握手。
+    // 顺带省掉每次克隆整个根证书表和重复的链校验开销。
+    static TLS_CFG: std::sync::OnceLock<Arc<rustls::ClientConfig>> = std::sync::OnceLock::new();
+    let config = TLS_CFG
+        .get_or_init(|| {
+            let roots = rustls::RootCertStore {
+                roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+            };
+            Arc::new(
+                rustls::ClientConfig::builder()
+                    .with_root_certificates(roots)
+                    .with_no_client_auth(),
+            )
+        })
+        .clone();
 
+    // 用 HEAD 而不是 GET: 判据只看回没回一行 "HTTP/..." 状态行, body 一个字节都不需要。
+    // 发 GET 的话服务器会照常推首页, 虽然我们读满 16 字节就断开, 但在断开前已经有
+    // 一整个初始拥塞窗口的数据发出来了 —— 实测每次探测白下 ~16KB, 换成 HEAD 只剩握手。
+    // 即便某些服务器对 HEAD 回 405 也无妨: 判据是"有没有合法 HTTP 响应", 不看状态码。
     let req = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {UA}\r\nConnection: close\r\n\r\n"
+        "HEAD {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {UA}\r\nConnection: close\r\n\r\n"
     );
     for addr in candidate_addrs(host, port) {
         if !fam.accepts(&addr) {
@@ -794,9 +852,14 @@ fn tls_verify_enabled() -> bool {
     cfg!(feature = "tls")
 }
 
-/// 探测目标的展示文案
+/// 探测目标的展示文案; 限定了地址族就标出来, 免得日志里看不出
+/// "不通"是真断网还是只因为限死了一族
 fn probe_desc(g: &Global) -> String {
-    g.probe_urls.join(" / ")
+    let urls = g.probe_urls.join(" / ");
+    match g.probe_family {
+        Family::Any => urls,
+        f => format!("{urls} ({})", f.label()),
+    }
 }
 
 /// 单次探测: 只认 https。
@@ -808,8 +871,9 @@ fn probe_once(g: &Global) -> (bool, String) {
         if !u.trim_start().starts_with("https://") {
             continue; // 非 https 条目一律不算数
         }
-        // v4 / v6 都在候选里, 任一地址整条走通即算连通
-        if url_ok(u, &g.gateway, Family::Any) {
+        // 默认 v4 / v6 都在候选里, 任一地址整条走通即算连通;
+        // probe_family 限定后只试那一族(另一族不可用时能少等一轮超时)
+        if url_ok(u, &g.gateway, g.probe_family) {
             return (true, u.clone());
         }
     }
@@ -820,6 +884,11 @@ fn probe_once(g: &Global) -> (bool, String) {
 /// 并发跑: 串行的话, 每个走不通的地址族都要耗掉一次连接/读超时,
 /// 目标一多就要十几秒, LuCI 上点一下等太久。
 fn probe_report(g: &Global) -> Vec<Value> {
+    // 限定了地址族就只探那一族: 报告要跟看门狗的判据一致, 否则这里显示
+    // "v4 通"而实际判定是不通, 反倒误导; 顺带省掉另一族那次注定失败的超时。
+    // 没探的那族输出 null, 跟"探了, 不通"(false)区分开。
+    let want4 = g.probe_family != Family::V6;
+    let want6 = g.probe_family != Family::V4;
     std::thread::scope(|scope| {
         let jobs: Vec<_> = g
             .probe_urls
@@ -828,8 +897,8 @@ fn probe_report(g: &Global) -> Vec<Value> {
                 if !u.trim_start().starts_with("https://") {
                     return (u, None);
                 }
-                let v4 = scope.spawn(move || url_ok(u, &g.gateway, Family::V4));
-                let v6 = scope.spawn(move || url_ok(u, &g.gateway, Family::V6));
+                let v4 = want4.then(|| scope.spawn(move || url_ok(u, &g.gateway, Family::V4)));
+                let v6 = want6.then(|| scope.spawn(move || url_ok(u, &g.gateway, Family::V6)));
                 (u, Some((v4, v6)))
             })
             .collect();
@@ -838,9 +907,10 @@ fn probe_report(g: &Global) -> Vec<Value> {
             .map(|(u, handles)| match handles {
                 None => json!({ "url": u, "skipped": "非 https, 不计入判定" }),
                 Some((h4, h6)) => {
-                    let v4 = h4.join().unwrap_or(false);
-                    let v6 = h6.join().unwrap_or(false);
-                    json!({ "url": u, "v4": v4, "v6": v6, "ok": v4 || v6 })
+                    let v4 = h4.map(|h| h.join().unwrap_or(false));
+                    let v6 = h6.map(|h| h.join().unwrap_or(false));
+                    let ok = v4.unwrap_or(false) || v6.unwrap_or(false);
+                    json!({ "url": u, "v4": v4, "v6": v6, "ok": ok })
                 }
             })
             .collect()
@@ -1116,6 +1186,9 @@ fn cmd_probe() {
             "ok": ok,
             "method": how,
             "probe_urls": g.probe_urls,
+            // detail 始终分族报, 便于定位单边故障; family 说明判定实际认哪族
+            "family": g.probe_family.as_str(),
+            "family_label": g.probe_family.label(),
             "detail": probe_report(&g),
             "tls_verify": tls_verify_enabled(),
         })
@@ -1222,16 +1295,17 @@ fn cmd_status() {
     println!("{out}");
 }
 
-const WATCHDOG_STATE: &str = "/tmp/campass-watchdog-ok";
+/// 连续探测失败次数; 探测一通即清零
+const WATCHDOG_STATE: &str = "/tmp/campass-watchdog-fails";
 
-fn read_watchdog_ok() -> u64 {
+fn read_fail_count() -> u64 {
     std::fs::read_to_string(WATCHDOG_STATE)
         .ok()
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0)
 }
-fn write_watchdog_ok(ts: u64) {
-    let _ = std::fs::write(WATCHDOG_STATE, ts.to_string());
+fn write_fail_count(n: u64) {
+    let _ = std::fs::write(WATCHDOG_STATE, n.to_string());
 }
 
 /// 登录后在 window 秒内反复探测, 确认真的能上网
@@ -1285,28 +1359,29 @@ fn try_account(g: &Global, sec: &str, action: &str) -> bool {
     }
 }
 
-/// 网络看门狗: 真实连通性持续不通 >= threshold 秒 -> 解绑->注销->登录
-/// (移植 watchdog.sh: 5 分钟内一直 ping 不通才恢复, 避免抖动误触)
+/// 网络看门狗: 连续 watchdog_fails 次探测都不通 -> 解绑->注销->登录。
+/// 按次数而不是按秒计: 探测本来就是按周期跑的, 用秒还要跟探测间隔做除法取整,
+/// 间隔一旦大于阈值, 阈值就形同虚设 —— 按次数则所见即所得。
 fn watchdog_tick(g: &Global) {
-    let now = now_ts();
     if probe_once(g).0 {
-        write_watchdog_ok(now);
+        write_fail_count(0);
         return;
     }
-    let last_ok = read_watchdog_ok();
-    if last_ok == 0 {
-        write_watchdog_ok(now); // 首次记录, 开始计时
-        return;
-    }
-    let down = now.saturating_sub(last_ok);
-    if down < g.watchdog_threshold {
-        log_line(&format!("{} 不通 {}s (<阈值), 继续观察", probe_desc(g), down));
+    let n = read_fail_count() + 1;
+    write_fail_count(n);
+    if n < g.watchdog_fails {
+        log_line(&format!(
+            "{} 不通 (连续第 {} 次, 满 {} 次才恢复)",
+            probe_desc(g),
+            n,
+            g.watchdog_fails
+        ));
         return;
     }
     log_line(&format!(
-        "{} 持续不通 {}s, 执行 解绑->注销->登录",
+        "{} 连续 {} 次探测失败, 执行 解绑->注销->登录",
         probe_desc(g),
-        down
+        n
     ));
     let cur_full = load_account(&g.active).map(|a| a.full()).unwrap_or_default();
     let r = unbind_action(g);
@@ -1318,13 +1393,13 @@ fn watchdog_tick(g: &Global) {
     // 1) 先用当前账号恢复
     if try_account(g, &g.active, "watchdog-login") {
         log_line("看门狗: 当前账号恢复成功");
-        write_watchdog_ok(now_ts());
+        write_fail_count(0);
         return;
     }
 
     if !g.watchdog_failover {
         log_line("看门狗: 当前账号恢复失败(未开启账号故障转移)");
-        write_watchdog_ok(now_ts());
+        write_fail_count(0);
         return;
     }
 
@@ -1342,7 +1417,7 @@ fn watchdog_tick(g: &Global) {
         let g2 = load_global();
         if try_account(&g2, &sec, "failover-login") {
             log_line(&format!("看门狗: 已自动切换到 {label} ({sec}) 并恢复联网"));
-            write_watchdog_ok(now_ts());
+            write_fail_count(0);
             return;
         }
     }
@@ -1350,7 +1425,7 @@ fn watchdog_tick(g: &Global) {
     // 3) 全都不行, 把 active 还原, 免得配置停在一个随机账号上
     set_active(&original);
     log_line("看门狗: 所有账号均无法恢复联网, 已还原为原账号");
-    write_watchdog_ok(now_ts()); // 重置计时
+    write_fail_count(0); // 重置计数
 }
 
 fn cmd_daemon() {
@@ -1381,7 +1456,11 @@ fn cmd_daemon() {
 
 fn cmd_log() {
     let content = std::fs::read_to_string(LOG_FILE).unwrap_or_default();
-    println!("{}", json!({ "log": content }));
+    // max 一并给出去: LuCI 那句"最多 N 行"的提示照着它写, 免得两边各写一个数
+    println!(
+        "{}",
+        json!({ "log": content, "max": log_max_lines() })
+    );
 }
 
 fn cmd_clearlog() {
